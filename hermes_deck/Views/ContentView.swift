@@ -89,7 +89,9 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .navigationTitle(store.selectedProfile.displayName)
+        // Profile display names can be raw lowercase ids (e.g. "researcher");
+        // the window title capitalizes the first letter.
+        .navigationTitle(windowTitle)
         .onAppear { NSApp.appearance = appTheme.nsAppearance }
         .onChange(of: appThemeRaw) { _, _ in NSApp.appearance = appTheme.nsAppearance }
         .toolbar {
@@ -135,6 +137,12 @@ struct ContentView: View {
         .overlay { profileMenuOverlay }
         .background(TitlebarSeparatorRemover())
         .toastOverlay()
+    }
+
+    private var windowTitle: String {
+        let name = store.selectedProfile.displayName
+        guard let first = name.first else { return name }
+        return first.uppercased() + name.dropFirst()
     }
 
     /// Profile picker popover, hosted at the window's top level so a click

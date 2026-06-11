@@ -460,6 +460,7 @@ private actor TUIGatewayRPCClient {
     private var eventContinuations: [UUID: AsyncStream<HermesAgentEvent>.Continuation] = [:]
     private var isStarted = false
     private var isReady = false
+    private var consumeTask: Task<Void, Never>?
 
     init(executableURL: URL, arguments: [String], workingDirectory: URL, environment: [String: String]) {
         self.process = Process()
@@ -549,18 +550,44 @@ private actor TUIGatewayRPCClient {
         guard !isStarted else { return }
         isStarted = true
 
-        output.fileHandleForReading.readabilityHandler = { [weak self] fileHandle in
+        // Stdout chunks are funneled through one per-launch FIFO stream consumed
+        // by a single task. Spawning a Task per readability callback gives no
+        // ordering guarantee across hops to this actor; under fast streaming,
+        // reordered chunks corrupt the line framing and can hang a turn.
+        let chunkStream = AsyncStream.makeStream(of: Data.self)
+        let chunks = chunkStream.stream
+        let chunkContinuation = chunkStream.continuation
+
+        output.fileHandleForReading.readabilityHandler = { fileHandle in
             let data = fileHandle.availableData
-            guard !data.isEmpty else { return }
-            Task { await self?.consume(data: data) }
+            // Empty read = EOF (the gateway exited and the pipe drained);
+            // finishing here — not in the termination handler, which can fire
+            // before the last chunks arrive — keeps the final events.
+            guard !data.isEmpty else {
+                fileHandle.readabilityHandler = nil
+                chunkContinuation.finish()
+                return
+            }
+            // Yielding (not Task-hopping) preserves chunk order; the single
+            // consumer below applies them to the framing buffer in sequence.
+            chunkContinuation.yield(data)
         }
         errorPipe.fileHandleForReading.readabilityHandler = { fileHandle in
             _ = fileHandle.availableData
         }
-        process.terminationHandler = { [weak self] _ in
-            Task { await self?.finishAfterExit() }
+        consumeTask = Task { [weak self, chunks] in
+            for await data in chunks {
+                guard let self else { return }
+                await self.consume(data: data)
+            }
+            await self?.finishAfterExit()
         }
-        try process.runTranslatingMissingCommand(named: "Hermes")
+        do {
+            try process.runTranslatingMissingCommand(named: "Hermes")
+        } catch {
+            chunkContinuation.finish()
+            throw error
+        }
     }
 
     private var buffer = Data()

@@ -22,3 +22,6 @@ xcuserdata/
 
 # Misc
 *.log
+
+# Local drafts
+ARTICLE.zh-CN.md

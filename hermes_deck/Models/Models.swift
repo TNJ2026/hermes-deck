@@ -317,7 +317,7 @@ final class ChatStore {
             let framed = replies
                 .map { "\($0.name) replied:\n\n\($0.reply)" }
                 .joined(separator: "\n\n———\n\n")
-            _ = await send(framed, in: sourceThreadID, profile: sourceProfile)
+            _ = await send(framed, in: sourceThreadID, profile: sourceProfile, isAgentReplyFollowUp: true)
         }
         return .routed
     }
@@ -1057,7 +1057,8 @@ final class ChatStore {
         _ rawText: String,
         in threadID: UUID,
         profile: HermesProfile,
-        routedSourceProfileName: String? = nil
+        routedSourceProfileName: String? = nil,
+        isAgentReplyFollowUp: Bool? = nil
     ) async -> String? {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
@@ -1066,7 +1067,8 @@ final class ChatStore {
             in: threadID,
             profile: profile,
             usesGlobalSendState: false,
-            routedSourceProfileName: routedSourceProfileName
+            routedSourceProfileName: routedSourceProfileName,
+            isAgentReplyFollowUp: isAgentReplyFollowUp
         )
     }
 
@@ -1076,7 +1078,8 @@ final class ChatStore {
         in threadID: UUID,
         profile: HermesProfile,
         usesGlobalSendState: Bool,
-        routedSourceProfileName: String? = nil
+        routedSourceProfileName: String? = nil,
+        isAgentReplyFollowUp: Bool? = nil
     ) async -> String? {
         guard thread(id: threadID) != nil else { return nil }
         let attachments = pendingAttachments(for: threadID, usesGlobalSendState: usesGlobalSendState)
@@ -1089,7 +1092,8 @@ final class ChatStore {
             role: .user,
             content: text,
             attachments: attachments,
-            routedSourceProfileName: routedSourceProfileName
+            routedSourceProfileName: routedSourceProfileName,
+            isAgentReplyFollowUp: isAgentReplyFollowUp
         )
         append(userMessage, to: threadID)
         historyThreadIDs.insert(threadID)

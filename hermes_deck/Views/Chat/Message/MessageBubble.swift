@@ -22,6 +22,10 @@ struct MessageBubble: View {
                                     sourceProfileName: routedSourceProfileName,
                                     prompt: message.content
                                 )
+                            } else if message.role == .user,
+                                      message.isAgentReplyFollowUp == true,
+                                      let framed = AgentRepliedContent.parse(message.content) {
+                                framed
                             } else if message.role == .assistant,
                                       let replyName = message.agentReplyName {
                                 ExternalAgentReplyContent(attribution: ExternalAgentReplyAttribution(
@@ -134,6 +138,36 @@ enum ExternalAgentAppearance {
     }
 }
 
+/// The close-the-loop follow-up fed back to a source agent (`X replied:`
+/// followed by the routed agent's reply). Only internally flagged messages use
+/// this view; ordinary user prose is never parsed into this shape.
+struct AgentRepliedContent: View {
+    let name: String
+    let reply: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(name) replied:")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.blue)
+                .lineLimit(1)
+
+            MarkdownView(reply)
+        }
+    }
+
+    /// Parses `<name> replied:\n\n<reply>`; the name must be a single line.
+    static func parse(_ content: String) -> AgentRepliedContent? {
+        let separator = " replied:\n\n"
+        guard let separatorRange = content.range(of: separator) else { return nil }
+        let name = String(content[..<separatorRange.lowerBound])
+        guard !name.isEmpty, !name.contains("\n") else { return nil }
+        let reply = String(content[separatorRange.upperBound...])
+        guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return AgentRepliedContent(name: name, reply: reply)
+    }
+}
+
 struct RoutedUserPromptContent: View {
     let sourceProfileName: String
     let prompt: String
@@ -141,7 +175,7 @@ struct RoutedUserPromptContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(sourceProfileName)@You:")
-                .font(.callout.weight(.semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.blue)
                 .lineLimit(1)
 

@@ -68,6 +68,11 @@ struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     /// pill explicitly, so ordinary `Label:\n\nbody` content is never misread as
     /// an agent reply.
     var agentReplyName: String?
+    /// Set only for internally generated close-the-loop follow-ups such as
+    /// `X replied:\n\n...`, fed back to a source agent after it routed work to
+    /// another agent. This keeps ordinary user-authored prose from being styled
+    /// as a routing receipt just because it matches that text shape.
+    var isAgentReplyFollowUp: Bool?
     /// True for messages reconstructed from a stored session. The store has no
     /// real generation duration for these, so the timer is suppressed instead
     /// of showing a meaningless 0s.
@@ -84,6 +89,7 @@ struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
         reasoningText: String = "",
         routedSourceProfileName: String? = nil,
         agentReplyName: String? = nil,
+        isAgentReplyFollowUp: Bool? = nil,
         isHistorical: Bool = false
     ) {
         self.id = id
@@ -96,6 +102,7 @@ struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
         self.reasoningText = reasoningText
         self.routedSourceProfileName = routedSourceProfileName
         self.agentReplyName = agentReplyName
+        self.isAgentReplyFollowUp = isAgentReplyFollowUp
         self.isHistorical = isHistorical
     }
 

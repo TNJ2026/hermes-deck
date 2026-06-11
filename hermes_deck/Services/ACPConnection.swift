@@ -28,6 +28,7 @@ actor ACPConnection {
     /// launch command — npx / codex-acp — isn't installed), so the user sees the
     /// real reason instead of a generic "gateway exited".
     private var stderrBuffer = Data()
+    private var consumeTask: Task<Void, Never>?
 
     init(spec: ACPLaunchSpec) {
         let stream = AsyncStream.makeStream(of: ACPInbound.self)
@@ -161,20 +162,45 @@ actor ACPConnection {
     private func startIfNeeded() throws {
         guard !isStarted else { return }
 
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Stdout chunks are funneled through one per-launch FIFO stream consumed
+        // by a single task: a Task per readability callback has no ordering
+        // guarantee across hops to this actor, and reordered chunks corrupt the
+        // line framing. The stream is intentionally local to this start attempt,
+        // so a failed launch cannot permanently finish future stdout delivery.
+        let chunkStream = AsyncStream.makeStream(of: Data.self)
+        let chunks = chunkStream.stream
+        let chunkContinuation = chunkStream.continuation
+
+        output.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
-            Task { await self?.consume(data) }
+            // Empty read = EOF (the adapter exited and the pipe drained);
+            // finishing here — not in a termination handler, which can fire
+            // before the last chunks arrive — keeps the final frames.
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                chunkContinuation.finish()
+                return
+            }
+            chunkContinuation.yield(data)
         }
         errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
             Task { await self?.appendStderr(data) }
         }
-        process.terminationHandler = { [weak self] _ in
-            Task { await self?.finishAfterExit() }
+        consumeTask = Task { [weak self, chunks] in
+            for await data in chunks {
+                guard let self else { return }
+                await self.consume(data)
+            }
+            await self?.finishAfterExit()
         }
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            chunkContinuation.finish()
+            throw error
+        }
         isStarted = true
     }
 

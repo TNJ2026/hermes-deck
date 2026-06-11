@@ -521,6 +521,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // Coding's reply is fed back to the researcher as a follow-up turn
         // (close the loop), so the source agent actually receives it …
         #expect(researcherMsgs.contains { $0.role == .user && $0.content.hasPrefix("Coding replied:") })
+        #expect(researcherMsgs.contains { $0.role == .user && $0.isAgentReplyFollowUp == true })
         // … and there is no bare echo on top of it — the framed follow-up is
         // the only copy of the reply shown in the source thread.
         #expect(!researcherMsgs.contains { $0.agentReplyName == "Coding" })
@@ -553,6 +554,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // The default agent's reply closed the loop back to the researcher.
         let researcherMsgs = try #require(store.thread(id: researcherThreadID)?.messages)
         #expect(researcherMsgs.contains { $0.role == .user && $0.content.hasPrefix("Hermes agent replied:") })
+        #expect(researcherMsgs.contains { $0.role == .user && $0.isAgentReplyFollowUp == true })
     }
 
     @Test
@@ -962,6 +964,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let source = try sourceFile("hermes_deck/Views/Chat/Message/MessageBubble.swift")
 
         #expect(source.contains("ExternalAgentReplyAttribution.parse(message.content)"))
+        #expect(source.contains("message.isAgentReplyFollowUp == true"))
         #expect(source.contains("ExternalAgentReplyContent(attribution: attribution)"))
         #expect(source.contains("ExternalAgentAppearance.color(for: attribution.source)"))
         #expect(source.contains("Color(red: 217 / 255, green: 119 / 255, blue: 86 / 255)"))
