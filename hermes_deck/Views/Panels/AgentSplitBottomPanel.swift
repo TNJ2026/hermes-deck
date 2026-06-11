@@ -25,6 +25,8 @@ struct AgentSplitBottomPanel: View {
             .padding(.top, 12)
             .padding(.bottom, 6)
 
+            Divider()
+
             ChatDetailView(
                 store: store,
                 draft: $draft,
