@@ -231,6 +231,10 @@ actor HermesTUIGatewayClient: HermesAgentClient {
         return ""
     }
 
+    func shutdown() async {
+        await rpc.shutdown()
+    }
+
     func respondToPermission(requestID: String, optionID: String) async {
         guard requestID.hasPrefix("hermes:") else { return }
         let sessionID = String(requestID.dropFirst("hermes:".count))
@@ -380,6 +384,13 @@ actor HermesProfileGatewayClient: HermesAgentClient {
         }
     }
 
+    /// Terminates every profile's tui_gateway subprocess. Called on app quit.
+    func shutdown() async {
+        for client in clientsByProfileID.values {
+            await client.shutdown()
+        }
+    }
+
     nonisolated func eventStream(for request: HermesChatRequest) -> AsyncThrowingStream<HermesAgentEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -502,6 +513,15 @@ private actor TUIGatewayRPCClient {
     /// hops onto the actor to perform the write.
     nonisolated func fireAndForgetNonisolated(method: String, params: [String: TUIJSONValue]) {
         Task { await self.fireAndForget(method: method, params: params) }
+    }
+
+    /// Graceful teardown on app quit: closing stdin delivers the EOF the
+    /// gateway's command loop exits on; SIGTERM covers one blocked mid-dispatch
+    /// (the EOF is only seen between requests).
+    func shutdown() {
+        guard isStarted, process.isRunning else { return }
+        input.fileHandleForWriting.closeFile()
+        process.terminate()
     }
 
     private func startIfNeeded() throws {

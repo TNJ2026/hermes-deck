@@ -328,6 +328,8 @@ protocol HermesAgentClient: Sendable {
     func slashExec(_ command: String, for request: HermesChatRequest) async throws -> String
     /// The agent's available slash commands. Default empty.
     func commandsCatalog(for profile: HermesProfile) async throws -> [SlashCommand]
+    /// Tears down any long-lived child processes on app quit. Default no-op.
+    func shutdown() async
 }
 
 protocol HermesProfileProvider: Sendable {
@@ -428,6 +430,8 @@ extension HermesAgentClient {
     func respondToPermission(requestID: String, optionID: String) async {}
 
     func warmUp(backend: AgentBackend) async {}
+
+    func shutdown() async {}
 
     func slashExec(_ command: String, for request: HermesChatRequest) async throws -> String {
         throw HermesAgentError.rpcError("Slash commands are not supported for this agent.")

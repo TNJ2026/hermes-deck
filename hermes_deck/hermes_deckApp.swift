@@ -45,8 +45,17 @@ private struct ChatWindowRoot: View {
     var body: some View {
         ContentView(store: store)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                // Kill spawned ACP adapter subtrees so codex-acp does not linger.
-                Task { await agentClient.shutdown() }
+                // Kill spawned agent subprocesses (ACP adapter subtrees and the
+                // per-profile tui_gateways). Bounded wait: this notification is
+                // the last chance to run — an un-awaited Task races app exit
+                // and usually loses. The clients are plain actors, so blocking
+                // the main thread here cannot deadlock them.
+                let done = DispatchSemaphore(value: 0)
+                Task.detached {
+                    await agentClient.shutdown()
+                    done.signal()
+                }
+                _ = done.wait(timeout: .now() + 2)
             }
     }
 }

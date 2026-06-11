@@ -386,10 +386,12 @@ actor RoutingAgentClient: HermesAgentClient {
         await client(for: agent).warmUp()
     }
 
-    /// Terminates every spawned ACP adapter process tree. Called on app quit.
+    /// Terminates every spawned ACP adapter process tree and the per-profile
+    /// tui_gateway subprocesses. Called on app quit.
     func shutdown() async {
         for client in acpClients.values {
             await client.shutdown()
         }
+        await hermes.shutdown()
     }
 }
