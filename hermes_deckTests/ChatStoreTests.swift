@@ -79,6 +79,10 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         ]
 
         #expect(store.agentProfiles.map(\.id) == ["coding", "research"])
+        // The mention list adds the main Hermes agent back, keeping its loaded
+        // display name.
+        #expect(store.mentionableProfiles.map(\.id) == ["coding", "research", "default"])
+        #expect(store.mentionableProfiles.last?.displayName == "Default")
     }
 
     @Test
@@ -432,12 +436,12 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
     @Test
     func agentPanelProfileReplyForwardsAddressedMention() async throws {
-        // A profile in an agent side panel whose reply leads with `@coding`
-        // forwards that reply to coding (single hop) and echoes coding's reply
-        // back into the panel thread.
+        // A profile in an agent side panel whose reply addresses coding via a
+        // fenced `@coding` code block forwards that block (single hop) and
+        // feeds coding's reply back into the panel thread.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "@coding investigate"),
+            agentClient: StubHermesAgentClient(reply: "```\n@coding investigate\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [
@@ -456,20 +460,69 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(coding.messages.filter { $0.role == .user }.map(\.content) == ["investigate"])
 
         let researcherMsgs = try #require(store.thread(id: researcherThreadID)?.messages)
-        // Coding's reply is echoed back into the researcher panel thread …
-        #expect(researcherMsgs.contains { $0.agentReplyName == "Coding" })
-        // … and fed back to the researcher as a follow-up turn (close the loop),
-        // so the source agent actually receives it.
+        // Coding's reply is fed back to the researcher as a follow-up turn
+        // (close the loop), so the source agent actually receives it …
         #expect(researcherMsgs.contains { $0.role == .user && $0.content.hasPrefix("Coding replied:") })
+        // … and there is no bare echo on top of it — the framed follow-up is
+        // the only copy of the reply shown in the source thread.
+        #expect(!researcherMsgs.contains { $0.agentReplyName == "Coding" })
     }
 
     @Test
-    func profileReplyWithLineLeadingMentionAfterProseForwards() async throws {
-        // The addressed mention no longer has to open the reply — prose may
-        // precede it, as long as the mention leads its own line.
+    func agentPanelReplyMentioningDefaultRoutesToMainHermesAgent() async throws {
+        // `@default` (the main Hermes agent) is addressable from an agent's
+        // reply: the segment routes into the main chat thread and the reply is
+        // fed back to the source agent.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "```\n@default summarize findings\n```"),
+            threads: [mainThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        // The main chat thread received the routed segment, attributed to the
+        // source agent.
+        let mainMsgs = try #require(store.thread(id: mainThread.id)?.messages)
+        let routed = try #require(mainMsgs.first { $0.role == .user && $0.content == "summarize findings" })
+        #expect(routed.routedSourceProfileName == "Researcher")
+        // The default agent's reply closed the loop back to the researcher.
+        let researcherMsgs = try #require(store.thread(id: researcherThreadID)?.messages)
+        #expect(researcherMsgs.contains { $0.role == .user && $0.content.hasPrefix("Hermes agent replied:") })
+    }
+
+    @Test
+    func mainChatDefaultSelfMentionIsTreatedAsPlainPrompt() async throws {
+        // `@default` typed in the main chat targets the thread it was typed in;
+        // routing there would loop, so it falls through to a normal send.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "ok"),
+            threads: [mainThread]
+        )
+
+        await store.send("@default hi")
+
+        #expect(store.threads.count == 1)
+        let messages = try #require(store.thread(id: mainThread.id)?.messages)
+        #expect(messages.map(\.role) == [.user, .assistant])
+        #expect(messages.first?.content == "@default hi")
+        #expect(messages.last?.content == "ok")
+    }
+
+    @Test
+    func profileReplyWithMentionCodeBlockAfterProseForwards() async throws {
+        // The addressed code block does not have to open the reply — prose may
+        // precede it.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "Here is my analysis.\n@coding investigate the crash"),
+            agentClient: StubHermesAgentClient(reply: "Here is my analysis.\n```\n@coding investigate the crash\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [
@@ -484,6 +537,28 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         let coding = try #require(store.threads.first { $0.profile.id == "coding" })
         #expect(coding.messages.filter { $0.role == .user }.map(\.content) == ["investigate the crash"])
+    }
+
+    @Test
+    func profileReplyWithBareLineLeadingMentionDoesNotForward() async throws {
+        // A mention outside a fenced code block — even one leading a line —
+        // is conversational; only `@target` opening its own block routes.
+        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "@coding investigate the crash"),
+            threads: [defaultThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        #expect(store.threads.first { $0.profile.id == "coding" } == nil)
     }
 
     @Test
@@ -509,18 +584,36 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
-    func lineLeadingRouteSpansSkipMidLineMentionsButKeepIndentedOnes() throws {
-        let text = "Summary first.\n@coding fix it, then ping @research\n  @research verify"
-        let spans = AgentMentionRouteParser.routeSpans(
-            in: text,
-            aliasGroups: [["coding"], ["research"]],
-            requireLineLeading: true
-        )
+    func codeBlockRouteSpansFollowOneBlockOneTargetRule() throws {
+        let aliasGroups = [["coding"], ["research"]]
+
+        // One block per target; prose mentions and blocks that don't *start*
+        // with a mention never route.
+        let text = """
+        Summary first, ping @research later.
+        ```
+        @coding fix the crash
+        in the parser
+        ```
+        ```
+        prefix @research verify
+        ```
+        ```
+        @research verify the fix
+        ```
+        """
+        let spans = AgentMentionRouteParser.codeBlockRouteSpans(in: text, aliasGroups: aliasGroups)
         #expect(spans.map(\.groupIndex) == [0, 1])
-        // Mid-line "@research" stays inside coding's segment; the indented
-        // line-leading one routes.
-        #expect(spans.first?.message == "fix it, then ping @research")
-        #expect(spans.last?.message == "verify")
+        #expect(spans.first?.message == "fix the crash\nin the parser")
+        #expect(spans.last?.message == "verify the fix")
+
+        // A block holding a second known mention is ambiguous — rejected.
+        let twoTargets = "```\n@coding fix it, then ping @research\n```"
+        #expect(AgentMentionRouteParser.codeBlockRouteSpans(in: twoTargets, aliasGroups: aliasGroups).isEmpty)
+
+        // An unclosed fence is not a block.
+        let unclosed = "```\n@coding fix it"
+        #expect(AgentMentionRouteParser.codeBlockRouteSpans(in: unclosed, aliasGroups: aliasGroups).isEmpty)
     }
 
     @Test
@@ -530,7 +623,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // receive a second prompt.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "@research go"),
+            agentClient: StubHermesAgentClient(reply: "```\n@research go\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [

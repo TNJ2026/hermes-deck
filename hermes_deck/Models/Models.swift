@@ -85,6 +85,16 @@ final class ChatStore {
         }
     }
 
+    /// Hermes profiles addressable via `@mention`: the agent profiles plus the
+    /// main Hermes agent (`default`), which has no side panel but can still be
+    /// routed to — its thread is the main chat.
+    var mentionableProfiles: [HermesProfile] {
+        let defaultProfile = availableProfiles.first {
+            $0.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "default"
+        } ?? .defaultProfile
+        return agentProfiles + [defaultProfile]
+    }
+
     /// Running subagents — drives the Task rail-icon badge.
     var runningSubagentCount: Int {
         taskSubagents.filter { $0.status == .running }.count
@@ -129,24 +139,22 @@ final class ChatStore {
     /// each receiving only the text after its own mention.
     private func resolvedMentionRoutes(
         for text: String,
-        requireLineLeading: Bool = false
+        codeBlockOnly: Bool = false
     ) -> [(target: AgentRouteTarget, message: String, returnsReply: Bool, isExternal: Bool)] {
         var groups: [(aliases: [String], target: AgentRouteTarget, isExternal: Bool)] = []
         for target in externalAgentMentionTargets {
             groups.append((target.aliases, AgentRouteTarget(profile: target.profile, backend: target.backend), true))
         }
-        for profile in agentProfiles {
+        for profile in mentionableProfiles {
             let aliases = [profile.id, profile.displayName]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             groups.append((aliases, AgentRouteTarget(profile: profile, backend: .hermes), false))
         }
 
-        let spans = AgentMentionRouteParser.routeSpans(
-            in: text,
-            aliasGroups: groups.map(\.aliases),
-            requireLineLeading: requireLineLeading
-        )
+        let spans = codeBlockOnly
+            ? AgentMentionRouteParser.codeBlockRouteSpans(in: text, aliasGroups: groups.map(\.aliases))
+            : AgentMentionRouteParser.routeSpans(in: text, aliasGroups: groups.map(\.aliases))
         var seenTargets = Set<String>()
         return spans.compactMap { span in
             guard span.groupIndex < groups.count else { return nil }
@@ -203,8 +211,8 @@ final class ChatStore {
     }
 
     /// Whether `text` mentions a forwardable agent (external or Hermes profile).
-    func hasMentionRoute(_ text: String, requireLineLeading: Bool = false) -> Bool {
-        !resolvedMentionRoutes(for: text, requireLineLeading: requireLineLeading).isEmpty
+    func hasMentionRoute(_ text: String, codeBlockOnly: Bool = false) -> Bool {
+        !resolvedMentionRoutes(for: text, codeBlockOnly: codeBlockOnly).isEmpty
     }
 
     /// Forwards an `@mention` prompt to its target agent when the source is
@@ -219,11 +227,16 @@ final class ChatStore {
         notifiesPanel: Bool = true,
         appendUserMessage: Bool = true,
         closesLoopToSource: Bool = false,
-        requireLineLeading: Bool = false
+        codeBlockOnly: Bool = false
     ) async -> PromptRouteResult {
-        let routes = resolvedMentionRoutes(for: text, requireLineLeading: requireLineLeading)
-        guard !routes.isEmpty else { return .notMention }
+        let allRoutes = resolvedMentionRoutes(for: text, codeBlockOnly: codeBlockOnly)
+        guard !allRoutes.isEmpty else { return .notMention }
         guard case .hermes(let sourceProfile) = source else { return .denied(.externalSourceCannotRoute) }
+        // A route whose target thread is the source thread itself (e.g.
+        // `@default` typed in the main chat, or a profile mentioning itself)
+        // would loop back into the same thread; treat it as plain text instead.
+        let routes = allRoutes.filter { threadIDForAgentProfile($0.target.profile) != sourceThreadID }
+        guard !routes.isEmpty else { return .notMention }
 
         let sourceAttachments = takePendingAttachmentsForRoute(from: sourceThreadID)
         if appendUserMessage {
@@ -275,10 +288,15 @@ final class ChatStore {
                     guard returnsReply, let routedResult, !routedResult.isEmpty else {
                         return nil
                     }
-                    append(
-                        ChatMessage(role: .assistant, content: routedResult, completedAt: .now, agentReplyName: profile.displayName),
-                        to: sourceThreadID
-                    )
+                    // When the loop closes back to the source agent, the framed
+                    // "X replied:" follow-up below already surfaces the reply in
+                    // the source thread; a bare echo would show it twice.
+                    if !closesLoopToSource {
+                        append(
+                            ChatMessage(role: .assistant, content: routedResult, completedAt: .now, agentReplyName: profile.displayName),
+                            to: sourceThreadID
+                        )
+                    }
                     return (name: profile.displayName, reply: routedResult)
                 }
             }
@@ -604,7 +622,7 @@ final class ChatStore {
     /// The two `@`-routing skills the Deck surfaces and manages (but does not
     /// drive — they complement the Deck's own client-side `@mention` forwarding):
     /// `agent-routing` shells out via `route.sh` (headless/cron), `deck-routing`
-    /// is the reply-with-`@target` convention the Deck itself forwards.
+    /// is the `@target` code-block convention the Deck itself forwards.
     static let agentRoutingSkillName = "agent-routing"
     static let deckRoutingSkillName = "deck-routing"
 
@@ -924,18 +942,19 @@ final class ChatStore {
         await forwardAddressedReply(reply, from: selectedProfile, sourceThreadID: selectedThreadID)
     }
 
-    /// Single hop: if a Hermes profile's reply is *deliberately addressed* — an
-    /// `@mention` that routes leads a line (not necessarily the first one) —
-    /// forward it to the mentioned agent(s) and echo their replies back into
-    /// `sourceThreadID`. A bare `@name` mid-prose ("ask @claude about X") must
-    /// not trigger an unsolicited fan-out.
+    /// Single hop: if a Hermes profile's reply is *deliberately addressed* —
+    /// a fenced code block whose content starts with a routing `@mention` —
+    /// forward that block's body to the mentioned agent and feed the reply
+    /// back into `sourceThreadID`. One block addresses one agent; several
+    /// blocks fan out. Mentions in prose ("ask @claude about X") or mid-block
+    /// must not trigger an unsolicited fan-out.
     ///
     /// `routePromptIfAllowed` dispatches through the low-level `send`, which does
     /// not itself forward — so a forwarded agent's reply is never re-parsed and
     /// the chain stops after one hop. Keep forwarding out of the low-level `send`
     /// to preserve that invariant.
     private func forwardAddressedReply(_ reply: String?, from profile: HermesProfile, sourceThreadID: UUID) async {
-        guard let reply, hasMentionRoute(reply, requireLineLeading: true) else { return }
+        guard let reply, hasMentionRoute(reply, codeBlockOnly: true) else { return }
         _ = await routePromptIfAllowed(
             reply,
             from: .hermes(profile: profile),
@@ -943,7 +962,7 @@ final class ChatStore {
             notifiesPanel: false,
             appendUserMessage: false,
             closesLoopToSource: true,
-            requireLineLeading: true
+            codeBlockOnly: true
         )
     }
 

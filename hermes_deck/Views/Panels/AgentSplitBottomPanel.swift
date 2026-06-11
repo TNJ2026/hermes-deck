@@ -35,6 +35,7 @@ struct AgentSplitBottomPanel: View {
                 composerPresentation: .inline,
                 showsComposer: showsComposer,
                 messageHorizontalInset: 8,
+                assistantTrailingInset: 12,
                 usesAgentsComposer: true,
                 threadID: threadID,
                 sendProfile: profile,

@@ -660,7 +660,7 @@ private struct MarkdownCodeBlockView: View {
             }
 
             ScrollView(.horizontal) {
-                Text(CodeBlockSyntaxHighlighter.attributedString(for: code, language: language))
+                Text(highlightedCode)
                     .font(.system(.body, design: .monospaced))
                     .padding(10)
             }
@@ -670,6 +670,15 @@ private struct MarkdownCodeBlockView: View {
         .background(Color.gray.opacity(0.12), in: shape)
         .clipShape(shape)
         .onDisappear { resetTask?.cancel() }
+    }
+
+    /// Routing blocks are plain fences leading with `@target` — tint mentions
+    /// blue there so the addressed agent stands out. Language-tagged code keeps
+    /// `@` tokens unstyled (Swift `@State`, Python decorators, …).
+    private var highlightedCode: AttributedString {
+        let attributed = CodeBlockSyntaxHighlighter.attributedString(for: code, language: language)
+        guard language == nil else { return attributed }
+        return markdownHighlightingMentions(attributed)
     }
 
     /// Flips the button to a checkmark, reverting to the copy icon after 2s.

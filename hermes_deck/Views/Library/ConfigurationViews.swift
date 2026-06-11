@@ -304,7 +304,7 @@ struct SkillsView: View {
                                 store: store,
                                 name: ChatStore.deckRoutingSkillName,
                                 title: "Deck Routing",
-                                blurb: "Inside the Deck, an agent delegates by beginning its reply with @target — the Deck forwards it and feeds the reply back.",
+                                blurb: "Inside the Deck, an agent delegates by replying with a code block that starts with @target — the Deck forwards the block and feeds the reply back.",
                                 missingHint: "Not installed — add it under ~/.hermes/skills/deck-routing."
                             )
                             // `agent-routing` is a non-Deck (headless/cron) skill;

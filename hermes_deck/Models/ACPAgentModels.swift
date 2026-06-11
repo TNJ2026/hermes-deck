@@ -82,6 +82,9 @@ enum AgentLaunchEnvironment {
             environment.removeValue(forKey: key)
         }
         environment["PATH"] = path(existing: base["PATH"])
+        // Marks a CLI agent (codex / gemini / claude) spawned by the Deck, so it
+        // can tell it is running inside the Hermes Deck app.
+        environment["HERMES_DECK"] = "1"
         return environment
     }
 

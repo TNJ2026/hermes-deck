@@ -313,6 +313,10 @@ actor HermesTUIGatewayClient: HermesAgentClient {
         let profileID = profile.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         environment["HERMES_PROFILE"] = profileID
         environment["HERMES_HOME"] = hermesHomePath(forProfileID: profileID)
+        // Same marker `hermes gateway start` gets (GatewayService): tells the
+        // agent its replies are rendered live in the Deck UI, where the
+        // `deck-routing` @target-code-block convention works.
+        environment["HERMES_DECK"] = "1"
         let executableBin = executableURL.deletingLastPathComponent()
         let venvURL = executableBin.deletingLastPathComponent()
         environment["VIRTUAL_ENV"] = normalizedPath(venvURL)

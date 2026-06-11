@@ -9,6 +9,10 @@ struct ChatDetailView: View {
     /// Side inset for the message list. Defaults to the wide main-chat column;
     /// the narrower right-sidebar panels pass a tighter value.
     var messageHorizontalInset: CGFloat = 24
+    /// Minimum gap between an assistant bubble and the trailing edge (user
+    /// bubbles keep their own). The right-sidebar panels pass a tighter value
+    /// so agent replies use more of the narrow column.
+    var assistantTrailingInset: CGFloat = 80
     /// The Agents panel opts into the single-line `AgentsComposerView`; the main
     /// chat and external-agent panels keep the standard `ComposerView`.
     var usesAgentsComposer = false
@@ -39,7 +43,7 @@ struct ChatDetailView: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 14) {
                                 ForEach(thread.messages) { message in
-                                    MessageBubble(message: message)
+                                    MessageBubble(message: message, assistantTrailingInset: assistantTrailingInset)
                                         .id(message.id)
                                 }
                                 if showsThinkingIndicator {
@@ -134,7 +138,8 @@ struct ChatDetailView: View {
                 answerPermission: answerPermission,
                 dismissClarificationRequest: dismissClarificationRequest,
                 requestFileImport: requestFileImport,
-                sendAction: send
+                sendAction: send,
+                composerProfileID: sendProfile?.id
             )
         } else {
             standardComposerView
@@ -160,7 +165,8 @@ struct ChatDetailView: View {
             requestFileImport: requestFileImport,
             sendAction: send,
             // Only the main chat (threadID == nil) executes slash commands.
-            slashCommands: (sendBackend == .hermes && threadID == nil) ? store.hermesSlashCommands : []
+            slashCommands: (sendBackend == .hermes && threadID == nil) ? store.hermesSlashCommands : [],
+            composerProfileID: sendProfile?.id
         )
     }
 

@@ -236,6 +236,7 @@ struct AgentsPanelView: View {
             composerPresentation: .inline,
             showsComposer: showsComposer(for: threadID),
             messageHorizontalInset: 8,
+            assistantTrailingInset: 12,
             usesAgentsComposer: true,
             threadID: threadID,
             sendProfile: profile,

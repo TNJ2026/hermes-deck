@@ -2,6 +2,10 @@ import SwiftUI
 
 struct MessageBubble: View {
     let message: ChatMessage
+    /// Minimum gap between an assistant bubble and the trailing edge. Defaults
+    /// to the wide main-chat column; the narrow right-sidebar panels pass a
+    /// tighter value so replies get more width. User bubbles are unaffected.
+    var assistantTrailingInset: CGFloat = 80
 
     var body: some View {
         HStack(alignment: .top) {
@@ -56,7 +60,7 @@ struct MessageBubble: View {
                     }
                 }
             }
-            if message.role != .user { Spacer(minLength: 80) }
+            if message.role != .user { Spacer(minLength: assistantTrailingInset) }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
     }
@@ -136,16 +140,10 @@ struct RoutedUserPromptContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(sourceProfileName)@You")
+            Text("\(sourceProfileName)@You:")
                 .font(.callout.weight(.semibold))
+                .foregroundStyle(.blue)
                 .lineLimit(1)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.accentColor.opacity(0.24))
-                }
 
             Text(prompt)
                 .font(.body)

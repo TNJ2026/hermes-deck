@@ -72,6 +72,7 @@ struct AgentPanelBody: View {
                     composerPresentation: .inline,
                     showsComposer: false,
                     messageHorizontalInset: 8,
+                    assistantTrailingInset: 12,
                     threadID: threadID,
                     sendProfile: store.thread(id: threadID)?.profile,
                     sendState: store.sendState(forAgentThreadID: threadID),

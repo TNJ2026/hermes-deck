@@ -23,6 +23,9 @@ struct AgentsComposerView: View {
     var dismissClarificationRequest: () -> Void
     var requestFileImport: () -> Void
     var sendAction: (String) async -> Void = { _ in }
+    /// The profile this composer sends as, excluded from the `@mention` list
+    /// (no self-mention). `nil` falls back to the main chat's selected profile.
+    var composerProfileID: String?
 
     @State private var sendTask: Task<Void, Never>?
     @State private var speechTranscriber = SpeechTranscriber()
@@ -194,8 +197,8 @@ struct AgentsComposerView: View {
     // MARK: - @ mention autocomplete
 
     private var mentionCandidates: [MentionCandidate] {
-        let hermes = store.agentProfiles
-            .filter { $0.id != store.selectedProfile.id }
+        let hermes = store.mentionableProfiles
+            .filter { $0.id != (composerProfileID ?? store.selectedProfile.id) }
             .map { profile in
                 MentionCandidate(
                     id: profile.id,
@@ -254,7 +257,7 @@ struct AgentsComposerView: View {
                 ids.insert(target.profile.id)
             }
         }
-        for profile in store.agentProfiles {
+        for profile in store.mentionableProfiles {
             let aliases = [profile.id, profile.displayName]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }

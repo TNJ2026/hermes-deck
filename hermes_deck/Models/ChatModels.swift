@@ -469,38 +469,18 @@ extension AgentMentionRouteParser {
     /// the prompt segment that follows it — up to the next mention or the end.
     /// Lets one composed message fan out to multiple @-mentioned agents, each
     /// getting only the text after its own mention.
-    ///
-    /// With `requireLineLeading`, only mentions whose `@` leads its line (after
-    /// optional indentation) count as routes; mid-prose mentions are left in
-    /// the surrounding segment text. Agent replies use this so prose can
-    /// precede the addressed mention without "ask @claude about X" routing.
     static func routeSpans(
         in text: String,
-        aliasGroups: [[String]],
-        requireLineLeading: Bool = false
+        aliasGroups: [[String]]
     ) -> [(groupIndex: Int, message: String)] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        // (groupIndex, alias) longest-first so "@claude code" beats "@claude";
-        // equal lengths break ties by group order (external groups precede hermes
-        // ones) — `sort` is not stable, so the tiebreak must be explicit.
-        var candidates: [(group: Int, alias: String)] = []
-        for (groupIndex, aliases) in aliasGroups.enumerated() {
-            for alias in aliases {
-                let cleaned = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !cleaned.isEmpty { candidates.append((groupIndex, cleaned)) }
-            }
-        }
-        candidates.sort {
-            $0.alias.count != $1.alias.count ? $0.alias.count > $1.alias.count : $0.group < $1.group
-        }
-
+        let candidates = mentionCandidates(for: aliasGroups)
         var mentions: [(group: Int, range: Range<String.Index>)] = []
         var index = trimmed.startIndex
         while index < trimmed.endIndex {
             if trimmed[index] == "@",
-               !requireLineLeading || isLineLeading(in: trimmed, at: index),
                let match = matchMention(in: trimmed, at: index, candidates: candidates) {
                 mentions.append((match.group, index..<match.end))
                 index = match.end
@@ -517,18 +497,76 @@ extension AgentMentionRouteParser {
         }
     }
 
-    /// Whether `atIndex` is at the start of its line, allowing only spaces or
-    /// tabs between the previous newline (or start of text) and the index.
-    private static func isLineLeading(in text: String, at atIndex: String.Index) -> Bool {
-        var index = atIndex
-        while index > text.startIndex {
-            let prior = text.index(before: index)
-            let character = text[prior]
-            if character.isNewline { return true }
-            guard character == " " || character == "\t" else { return false }
-            index = prior
+    /// Agent-reply routing: a mention routes only when it sits in its own
+    /// fenced code block whose content *starts* with `@alias`; the rest of the
+    /// block is the routed message. One block addresses one target — a block
+    /// holding any further known mention is rejected, and mentions in prose or
+    /// mid-block never route. Each qualifying block yields one route, so a
+    /// reply with several blocks still fans out.
+    static func codeBlockRouteSpans(
+        in text: String,
+        aliasGroups: [[String]]
+    ) -> [(groupIndex: Int, message: String)] {
+        let candidates = mentionCandidates(for: aliasGroups)
+        return fencedCodeBlockContents(in: text).compactMap { block in
+            let content = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard content.first == "@",
+                  let match = matchMention(in: content, at: content.startIndex, candidates: candidates) else {
+                return nil
+            }
+            let message = content[match.end...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty, !containsMention(message, candidates: candidates) else { return nil }
+            return (match.group, message)
         }
-        return true
+    }
+
+    /// (groupIndex, alias) longest-first so "@claude code" beats "@claude";
+    /// equal lengths break ties by group order (external groups precede hermes
+    /// ones) — `sort` is not stable, so the tiebreak must be explicit.
+    private static func mentionCandidates(for aliasGroups: [[String]]) -> [(group: Int, alias: String)] {
+        var candidates: [(group: Int, alias: String)] = []
+        for (groupIndex, aliases) in aliasGroups.enumerated() {
+            for alias in aliases {
+                let cleaned = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty { candidates.append((groupIndex, cleaned)) }
+            }
+        }
+        candidates.sort {
+            $0.alias.count != $1.alias.count ? $0.alias.count > $1.alias.count : $0.group < $1.group
+        }
+        return candidates
+    }
+
+    private static func containsMention(_ text: String, candidates: [(group: Int, alias: String)]) -> Bool {
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index] == "@", matchMention(in: text, at: index, candidates: candidates) != nil {
+                return true
+            }
+            index = text.index(after: index)
+        }
+        return false
+    }
+
+    /// Contents of every closed ``` fenced block, in order. The opening fence
+    /// may carry an info string (```text); an unclosed trailing fence does not
+    /// count as a block.
+    private static func fencedCodeBlockContents(in text: String) -> [String] {
+        var blocks: [String] = []
+        var currentLines: [Substring]?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                if let lines = currentLines {
+                    blocks.append(lines.joined(separator: "\n"))
+                    currentLines = nil
+                } else {
+                    currentLines = []
+                }
+            } else {
+                currentLines?.append(line)
+            }
+        }
+        return blocks
     }
 
     /// Matches `@<alias>` at `atIndex` (the `@`), honoring the mention boundary
