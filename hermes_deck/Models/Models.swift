@@ -488,10 +488,6 @@ final class ChatStore {
 
     func setProfile(_ profile: HermesProfile) {
         selectedProfile = profile
-        mutateSelectedThread { thread in
-            thread.profile = profile
-            thread.updatedAt = .now
-        }
     }
 
     /// Switches the active profile and starts a fresh chat session under it. Used
@@ -903,6 +899,8 @@ final class ChatStore {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        ensureSelectedThreadMatchesProfile()
+
         // `@codex` / `@claude` / `@gemini` and `@<hermes-profile>` forward the
         // prompt to that agent and echo its reply back into the current thread.
         if hasMentionRoute(text) {
@@ -940,6 +938,20 @@ final class ChatStore {
         await loadHistorySessions()
 
         await forwardAddressedReply(reply, from: selectedProfile, sourceThreadID: selectedThreadID)
+    }
+
+    /// A profile switched outside the chat page (`setProfile`) leaves the
+    /// selected thread tagged with its old profile; continuing there would mix
+    /// two gateways' sessions in one thread (the old `hermesSessionID` cannot
+    /// resume on the new profile's gateway). An empty thread is simply
+    /// retagged; one with history gets a fresh thread under the new profile.
+    private func ensureSelectedThreadMatchesProfile() {
+        guard let thread = selectedThread, thread.profile.id != selectedProfile.id else { return }
+        if thread.messages.isEmpty {
+            mutateSelectedThread { $0.profile = selectedProfile }
+        } else {
+            createThread()
+        }
     }
 
     /// Single hop: if a Hermes profile's reply is *deliberately addressed* —

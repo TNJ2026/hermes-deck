@@ -534,8 +534,15 @@ private actor TUIGatewayRPCClient {
     /// (the EOF is only seen between requests).
     func shutdown() {
         guard isStarted, process.isRunning else { return }
-        input.fileHandleForWriting.closeFile()
+        try? input.fileHandleForWriting.close()
         process.terminate()
+        if process.isRunning {
+            for _ in 0..<5 {
+                Thread.sleep(forTimeInterval: 0.1)
+                if !process.isRunning { return }
+            }
+            ACPConnection.killTree(pid: process.processIdentifier)
+        }
     }
 
     private func startIfNeeded() throws {

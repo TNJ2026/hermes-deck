@@ -114,23 +114,16 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         let environment = Self.environment(for: profile, rootURL: rootURL)
 
         return try await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.environment = environment
-            process.standardOutput = output
-            process.standardError = output
-
-            try process.runTranslatingMissingCommand(named: "Hermes")
-            process.waitUntilExit()
-
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            if process.terminationStatus != 0 {
-                let message = String(data: data, encoding: .utf8)?.pluginTextValue ?? "hermes tools list failed"
-                throw NSError(domain: "HermesTools", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
+            let result = try await Self.runHermesList(
+                executableURL: executableURL,
+                arguments: arguments,
+                environment: environment
+            )
+            if result.status != 0 {
+                let message = String(data: result.output, encoding: .utf8)?.pluginTextValue ?? "hermes tools list failed"
+                throw NSError(domain: "HermesTools", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: message])
             }
-            return HermesToolListParser.parse(data)
+            return HermesToolListParser.parse(result.output)
         }.value
     }
 
@@ -200,23 +193,13 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         let arguments = hermesArgumentsPrefix + ["tools", "list"]
 
         return try await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = output
-
-            try process.runTranslatingMissingCommand(named: "Hermes")
-            process.waitUntilExit()
-
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            if process.terminationStatus != 0 {
-                let message = String(data: data, encoding: .utf8)?.pluginTextValue ?? "hermes tools list failed"
-                throw NSError(domain: "HermesTools", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
+            let result = try await Self.runHermesList(executableURL: executableURL, arguments: arguments)
+            if result.status != 0 {
+                let message = String(data: result.output, encoding: .utf8)?.pluginTextValue ?? "hermes tools list failed"
+                throw NSError(domain: "HermesTools", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: message])
             }
 
-            return HermesToolListParser.parse(data)
+            return HermesToolListParser.parse(result.output)
         }.value
     }
 
@@ -272,6 +255,27 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         try config.setStringArray(enabledNames, at: enabledPath)
         try config.setStringArray(disabledNames, at: disabledPath)
         try config.save()
+    }
+
+    fileprivate nonisolated static func runHermesList(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]? = nil
+    ) async throws -> (status: Int32, output: Data) {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+        process.standardOutput = output
+        process.standardError = output
+
+        try process.runTranslatingMissingCommand(named: "Hermes")
+        let outputDataTask = Task {
+            output.fileHandleForReading.readDataToEndOfFile()
+        }
+        process.waitUntilExit()
+        return (process.terminationStatus, await outputDataTask.value)
     }
 
     private static func configuredStatuses(from configURL: URL) throws -> [String: String] {
@@ -420,24 +424,17 @@ struct LocalHermesSkillProvider: HermesSkillProvider {
         let environment = LocalHermesPluginProvider.environment(for: profile, rootURL: rootURL)
 
         return try await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.environment = environment
-            process.standardOutput = output
-            process.standardError = output
-
-            try process.runTranslatingMissingCommand(named: "Hermes")
-            process.waitUntilExit()
-
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            if process.terminationStatus != 0 {
-                let message = String(data: data, encoding: .utf8)?.pluginTextValue ?? "hermes skills list failed"
-                throw NSError(domain: "HermesSkills", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
+            let result = try await LocalHermesPluginProvider.runHermesList(
+                executableURL: executableURL,
+                arguments: arguments,
+                environment: environment
+            )
+            if result.status != 0 {
+                let message = String(data: result.output, encoding: .utf8)?.pluginTextValue ?? "hermes skills list failed"
+                throw NSError(domain: "HermesSkills", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: message])
             }
 
-            return HermesSkillListParser.parse(data)
+            return HermesSkillListParser.parse(result.output)
         }.value
     }
 
@@ -459,23 +456,16 @@ struct LocalHermesSkillProvider: HermesSkillProvider {
         let arguments = hermesArgumentsPrefix + ["skills", "list"]
 
         return try await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = output
-
-            try process.runTranslatingMissingCommand(named: "Hermes")
-            process.waitUntilExit()
-
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            if process.terminationStatus != 0 {
-                let message = String(data: data, encoding: .utf8)?.pluginTextValue ?? "hermes skills list failed"
-                throw NSError(domain: "HermesSkills", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
+            let result = try await LocalHermesPluginProvider.runHermesList(
+                executableURL: executableURL,
+                arguments: arguments
+            )
+            if result.status != 0 {
+                let message = String(data: result.output, encoding: .utf8)?.pluginTextValue ?? "hermes skills list failed"
+                throw NSError(domain: "HermesSkills", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: message])
             }
 
-            return HermesSkillListParser.parse(data)
+            return HermesSkillListParser.parse(result.output)
         }.value
     }
 

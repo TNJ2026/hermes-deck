@@ -279,6 +279,64 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func settingProfileDoesNotRetagSelectedThread() {
+        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "ok"),
+            threads: [defaultThread]
+        )
+
+        store.setProfile(.coding)
+
+        #expect(store.selectedProfile.id == "coding")
+        #expect(store.selectedThreadID == defaultThread.id)
+        #expect(store.thread(id: defaultThread.id)?.profile.id == "default")
+    }
+
+    @Test
+    func sendAfterProfileSwitchStartsThreadUnderNewProfile() async throws {
+        // A profile switched outside the chat page leaves the selected thread
+        // tagged with the old profile; the next send must not mix the new
+        // profile's session into that history.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "ok"),
+            threads: [mainThread]
+        )
+
+        await store.send("hello")
+        store.setProfile(.coding)
+        await store.send("continue")
+
+        // The original thread kept its profile and got no new messages …
+        #expect(store.thread(id: mainThread.id)?.profile.id == "default")
+        #expect(store.thread(id: mainThread.id)?.messages.count == 2)
+        // … and the second send went to a fresh thread under the new profile.
+        let newID = try #require(store.selectedThreadID)
+        #expect(newID != mainThread.id)
+        #expect(store.thread(id: newID)?.profile.id == "coding")
+        #expect(store.thread(id: newID)?.messages.map(\.role) == [.user, .assistant])
+    }
+
+    @Test
+    func sendAfterProfileSwitchRetagsEmptySelectedThread() async throws {
+        // An empty selected thread has no history to protect — retag it
+        // instead of leaving an orphaned "New Chat" behind.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "ok"),
+            threads: [mainThread]
+        )
+
+        store.setProfile(.coding)
+        await store.send("hello")
+
+        #expect(store.threads.count == 1)
+        #expect(store.thread(id: mainThread.id)?.profile.id == "coding")
+        #expect(store.thread(id: mainThread.id)?.messages.map(\.role) == [.user, .assistant])
+    }
+
+    @Test
     func sendingToAgentThreadDoesNotMutateMainSelectedThread() async throws {
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
