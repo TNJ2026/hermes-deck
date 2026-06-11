@@ -1011,17 +1011,17 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
-    func historyTimestampFormatterUsesCompactChineseRelativeLabels() throws {
+    func historyTimestampFormatterUsesCompactRelativeLabels() throws {
         let calendar = Calendar(identifier: .gregorian)
         let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 3, hour: 14, minute: 30)))
 
         #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 3, hour: 9, minute: 5))), now: now, calendar: calendar) == "09:05")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 2, hour: 22, minute: 0))), now: now, calendar: calendar) == "昨天")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 31))), now: now, calendar: calendar) == "3天前")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 13))), now: now, calendar: calendar) == "3周前")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 3))), now: now, calendar: calendar) == "3个月前")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2025, month: 6, day: 3))), now: now, calendar: calendar) == "去年")
-        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2024, month: 6, day: 3))), now: now, calendar: calendar) == "前年")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 2, hour: 22, minute: 0))), now: now, calendar: calendar) == "Yesterday")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 31))), now: now, calendar: calendar) == "3 days ago")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 13))), now: now, calendar: calendar) == "3 weeks ago")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 3))), now: now, calendar: calendar) == "3 months ago")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2025, month: 6, day: 3))), now: now, calendar: calendar) == "Last year")
+        #expect(HistoryTimestampFormatter.displayText(for: try #require(calendar.date(from: DateComponents(year: 2024, month: 6, day: 3))), now: now, calendar: calendar) == "2 years ago")
     }
 
     @Test
@@ -1037,7 +1037,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         let groups = SessionDateGrouper.groups(for: sessions, now: now, calendar: calendar)
 
-        #expect(groups.map(\.title) == ["今天", "昨天", "2026年5月", "2026年4月"])
+        #expect(groups.map(\.title) == ["Today", "Yesterday", "2026-05", "2026-04"])
         #expect(groups.map { $0.sessions.map(\.id) } == [["today"], ["yesterday"], ["may"], ["april"]])
     }
 
@@ -1052,7 +1052,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         let groups = SessionDateGrouper.groups(for: sessions, now: now, calendar: calendar)
 
-        #expect(groups.map(\.title) == ["2026年5月", "2026年4月"])
+        #expect(groups.map(\.title) == ["2026-05", "2026-04"])
     }
 
     @Test

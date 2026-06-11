@@ -446,8 +446,9 @@ struct ComposerView: View {
     }
 
     private func updateDraft(withTranscript transcript: String) {
-        // 不门控 isRecording：最终 (isFinal) 结果到达时 state 已被重置为 .idle，
-        // SwiftUI 在合并的视图更新里触发 onChange，此时 isRecording 必为 false。
+        // Not gated on isRecording: by the time the final (isFinal) result
+        // arrives, state has already been reset to .idle and SwiftUI delivers
+        // onChange in a coalesced view update where isRecording is false.
         guard !transcript.isEmpty else { return }
         let separator = speechBaselineDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
         draft = speechBaselineDraft + separator + transcript

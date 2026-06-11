@@ -263,7 +263,8 @@ final class SpeechTranscriber {
             finishRecording(cancelTask: true)
             return
         }
-        // 优雅停止：保留 task，等待 isFinal 回调，避免丢掉尾音识别结果。
+        // Graceful stop: keep the task and wait for the isFinal callback so
+        // the trailing audio's recognition result isn't lost.
         userInitiatedStop = true
         capture.stop()
         recognitionRequest?.endAudio()

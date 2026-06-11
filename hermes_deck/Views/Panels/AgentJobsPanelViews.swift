@@ -468,7 +468,7 @@ struct ScheduledJobRow: View {
             let errorMessage = await store.performJobAction(action, jobID: job.id, for: profile)
             isBusy = false
             if action == .run {
-                showToast(errorMessage ?? "已触发")
+                showToast(errorMessage ?? "Triggered")
             }
         }
     }

@@ -13,18 +13,20 @@ enum HistoryTimestampFormatter {
             return timeText(for: date, calendar: calendar)
         }
 
-        if days <= 1 { return "昨天" }
-        if days < 7 { return "\(days)天前" }
-        if days < 30 { return "\(days / 7)周前" }
+        if days <= 1 { return "Yesterday" }
+        if days < 7 { return "\(days) days ago" }
+        if days < 30 {
+            let weeks = days / 7
+            return weeks == 1 ? "1 week ago" : "\(weeks) weeks ago"
+        }
 
         let components = calendar.dateComponents([.year, .month], from: date, to: now)
         let years = components.year ?? 0
-        if years == 1 { return "去年" }
-        if years == 2 { return "前年" }
-        if years > 2 { return "\(years)年前" }
+        if years == 1 { return "Last year" }
+        if years >= 2 { return "\(years) years ago" }
 
         let months = max(1, components.month ?? days / 30)
-        return "\(months)个月前"
+        return months == 1 ? "1 month ago" : "\(months) months ago"
     }
 
     private static func timeText(for date: Date, calendar: Calendar) -> String {
@@ -80,23 +82,24 @@ enum SessionDateGrouper {
         usesRelativeDayGroups: Bool
     ) -> (id: String, title: String) {
         guard let date = session.lastActiveDate else {
-            return ("unknown", "未知时间")
+            return ("unknown", "Unknown date")
         }
 
         if usesRelativeDayGroups {
             if calendar.isDate(date, inSameDayAs: now) {
-                return ("today", "今天")
+                return ("today", "Today")
             }
 
             if isYesterday(date, now: now, calendar: calendar) {
-                return ("yesterday", "昨天")
+                return ("yesterday", "Yesterday")
             }
         }
 
         let components = calendar.dateComponents([.year, .month], from: date)
         let year = components.year ?? 0
         let month = components.month ?? 0
-        return (String(format: "%04d-%02d", year, month), "\(year)年\(month)月")
+        let key = String(format: "%04d-%02d", year, month)
+        return (key, key)
     }
 
     private static func isYesterday(_ date: Date, now: Date, calendar: Calendar) -> Bool {
