@@ -11,9 +11,6 @@ struct AgentSplitBottomPanel: View {
     @Binding var isFileImporterPresented: Bool
     let availableProfiles: [HermesProfile]
     let onFileImportRequested: (UUID?) -> Void
-    /// Hover state is local so the bottom pane's composer shows/hides
-    /// independently of the top pane.
-    @State private var isComposerVisible = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,7 +30,7 @@ struct AgentSplitBottomPanel: View {
                 draft: $draft,
                 isFileImporterPresented: $isFileImporterPresented,
                 composerPresentation: .inline,
-                showsComposer: showsComposer,
+                showsComposer: true,
                 messageHorizontalInset: 8,
                 assistantTrailingInset: 12,
                 usesAgentsComposer: true,
@@ -64,28 +61,5 @@ struct AgentSplitBottomPanel: View {
                 .padding(.top, 10)
             }
         }
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) { isComposerVisible = hovering }
-        }
-    }
-
-    private var showsComposer: Bool {
-        isThreadEmpty || isComposerVisible || needsAttention
-    }
-
-    /// Keep the composer visible mid-turn (reply streaming or awaiting a
-    /// permission / clarification answer) so the stop button and banners stay
-    /// reachable regardless of hover.
-    private var needsAttention: Bool {
-        store.sendState(forAgentThreadID: threadID) == .sending
-            || store.pendingPermissionRequest(forAgentThreadID: threadID) != nil
-            || store.pendingClarificationRequest(forAgentThreadID: threadID) != nil
-    }
-
-    private var isThreadEmpty: Bool {
-        guard let threadID else { return true }
-        return (store.thread(id: threadID)?.messages.isEmpty ?? true)
-            && store.sendState(forAgentThreadID: threadID) != .sending
     }
 }

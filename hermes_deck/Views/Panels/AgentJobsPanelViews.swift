@@ -11,7 +11,6 @@ struct AgentsPanelView: View {
     @Binding var secondAgentThreadID: UUID?
     @Binding var secondDraft: String
     let onFileImportRequested: (UUID?) -> Void
-    @State private var isComposerVisible = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -75,11 +74,6 @@ struct AgentsPanelView: View {
                 agentChat(threadID: selectedAgentThreadID, profile: selectedAgentProfile, draft: $draft)
                     .frame(maxHeight: .infinity)
                     .padding(.bottom, 10)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        withAnimation(.easeInOut(duration: 0.2)) { isComposerVisible = hovering }
-                        // Test compatibility: isComposerVisible = $0
-                    }
 
                 Divider()
 
@@ -95,11 +89,6 @@ struct AgentsPanelView: View {
                 .frame(maxHeight: .infinity)
             } else {
                 agentChat(threadID: selectedAgentThreadID, profile: selectedAgentProfile, draft: $draft)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        withAnimation(.easeInOut(duration: 0.2)) { isComposerVisible = hovering }
-                        // Test compatibility: isComposerVisible = $0
-                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -234,7 +223,7 @@ struct AgentsPanelView: View {
             draft: draft,
             isFileImporterPresented: $isFileImporterPresented,
             composerPresentation: .inline,
-            showsComposer: showsComposer(for: threadID),
+            showsComposer: true,
             messageHorizontalInset: 8,
             assistantTrailingInset: 12,
             usesAgentsComposer: true,
@@ -243,25 +232,6 @@ struct AgentsPanelView: View {
             sendState: store.sendState(forAgentThreadID: threadID),
             onFileImportRequested: onFileImportRequested
         )
-    }
-
-    private func showsComposer(for threadID: UUID?) -> Bool {
-        isAgentThreadEmpty(threadID) || isComposerVisible || needsAttention(threadID)
-    }
-
-    /// Keep the composer visible — regardless of hover — while a reply is in
-    /// flight or the agent awaits a permission / clarification answer, so the
-    /// stop button and those banners stay reachable mid-turn.
-    private func needsAttention(_ threadID: UUID?) -> Bool {
-        store.sendState(forAgentThreadID: threadID) == .sending
-            || store.pendingPermissionRequest(forAgentThreadID: threadID) != nil
-            || store.pendingClarificationRequest(forAgentThreadID: threadID) != nil
-    }
-
-    private func isAgentThreadEmpty(_ threadID: UUID?) -> Bool {
-        guard let threadID else { return true }
-        return (store.thread(id: threadID)?.messages.isEmpty ?? true)
-            && store.sendState(forAgentThreadID: threadID) != .sending
     }
 
     /// Toggles the top/bottom split, seeding the bottom pane with a profile

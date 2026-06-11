@@ -175,11 +175,10 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         #expect(agentsSource.contains("ChatDetailView("))
         #expect(agentsSource.contains("composerPresentation: .inline"))
-        #expect(agentsSource.contains("@State private var isComposerVisible = false"))
-        #expect(agentsSource.contains("showsComposer: showsComposer(for: threadID)"))
-        #expect(agentsSource.contains("isAgentThreadEmpty(threadID) || isComposerVisible"))
-        #expect(agentsSource.contains(".onHover"))
-        #expect(agentsSource.contains("isComposerVisible = $0"))
+        // The Agents panel composer is always visible — no hover show/hide.
+        #expect(agentsSource.contains("showsComposer: true"))
+        #expect(!agentsSource.contains("isComposerVisible"))
+        #expect(!agentsSource.contains(".onHover"))
         #expect(composerChromeSource.contains("func composerSurface(presentation: ComposerPresentation"))
     }
 
@@ -198,7 +197,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(agentsSource.contains("Picker(\"Profile\", selection: $selectedAgentProfile)"))
         #expect(agentsSource.contains("selectableAgentProfiles"))
         #expect(agentsSource.contains("ChatDetailView("))
-        #expect(agentsSource.contains("showsComposer: showsComposer(for: threadID)"))
+        #expect(agentsSource.contains("showsComposer: true"))
         #expect(!agentsSource.contains("struct AgentProfileRow: View"))
         #expect(!agentsSource.contains("store.setProfile"))
     }
