@@ -16,11 +16,16 @@ struct PermissionRequestBanner: View {
                 Text(bannerTitle)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(request.message)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                // Long permission texts (full commands, diffs) scroll between
+                // the title and the answer buttons instead of growing the
+                // banner past the viewport; short ones keep their exact height.
+                ViewThatFits(in: .vertical) {
+                    messageText
+                    ScrollView {
+                        messageText
+                    }
+                }
+                .frame(maxHeight: 200)
 
                 if request.isAnswerable {
                     FlowLayout(spacing: 6) {
@@ -63,6 +68,15 @@ struct PermissionRequestBanner: View {
         }
     }
 
+    private var messageText: some View {
+        Text(request.message)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var bannerTitle: String {
         request.isAnswerable ? "Permission request" : "Tool permission"
     }
@@ -103,11 +117,16 @@ struct ClarificationRequestBanner: View {
                 Text(title)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(request.question)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                // Long questions scroll between the title and the answer row
+                // instead of growing the banner past the viewport; short ones
+                // keep their exact height.
+                ViewThatFits(in: .vertical) {
+                    questionText
+                    ScrollView {
+                        questionText
+                    }
+                }
+                .frame(maxHeight: 200)
 
                 switch interactionKind {
                 case .confirmation, .choice:
@@ -168,6 +187,15 @@ struct ClarificationRequestBanner: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.accentColor.opacity(0.28))
         }
+    }
+
+    private var questionText: some View {
+        Text(request.question)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var interactionKind: ClarificationInteractionKind {
