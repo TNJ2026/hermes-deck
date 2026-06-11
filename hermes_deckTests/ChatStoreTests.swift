@@ -1181,7 +1181,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
-                .appendingPathComponent("hermes_deck/Models/Models.swift"),
+                .appendingPathComponent("hermes_deck/Models/ChatStore+Send.swift"),
             encoding: .utf8
         )
 
