@@ -143,7 +143,7 @@ actor HermesTUIGatewayClient: HermesAgentClient {
                         )
                     }
 
-                    let gatewayEvents = rpc.events
+                    let gatewayEvents = await rpc.eventStream()
                     let eventTask = Task {
                         for await event in gatewayEvents {
                             // Surface errors only through the thrown termination so the
@@ -451,23 +451,17 @@ private extension HermesAgentEvent {
 }
 
 private actor TUIGatewayRPCClient {
-    let events: AsyncStream<HermesAgentEvent>
-
     private let process: Process
     private let input: Pipe
     private let output: Pipe
     private let errorPipe: Pipe
-    private let eventContinuation: AsyncStream<HermesAgentEvent>.Continuation
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<TUIJSONValue, Error>] = [:]
+    private var eventContinuations: [UUID: AsyncStream<HermesAgentEvent>.Continuation] = [:]
     private var isStarted = false
     private var isReady = false
 
     init(executableURL: URL, arguments: [String], workingDirectory: URL, environment: [String: String]) {
-        let stream = AsyncStream.makeStream(of: HermesAgentEvent.self)
-        self.events = stream.stream
-        self.eventContinuation = stream.continuation
-
         self.process = Process()
         self.process.executableURL = executableURL
         self.process.arguments = arguments
@@ -480,6 +474,16 @@ private actor TUIGatewayRPCClient {
         self.process.standardInput = input
         self.process.standardOutput = output
         self.process.standardError = errorPipe
+    }
+
+    func eventStream() -> AsyncStream<HermesAgentEvent> {
+        let id = UUID()
+        let stream = AsyncStream.makeStream(of: HermesAgentEvent.self)
+        eventContinuations[id] = stream.continuation
+        stream.continuation.onTermination = { _ in
+            Task { await self.removeEventContinuation(id: id) }
+        }
+        return stream.stream
     }
 
     func call(method: String, params: [String: TUIJSONValue]) async throws -> TUIJSONValue {
@@ -513,6 +517,16 @@ private actor TUIGatewayRPCClient {
     /// hops onto the actor to perform the write.
     nonisolated func fireAndForgetNonisolated(method: String, params: [String: TUIJSONValue]) {
         Task { await self.fireAndForget(method: method, params: params) }
+    }
+
+    private func removeEventContinuation(id: UUID) {
+        eventContinuations.removeValue(forKey: id)
+    }
+
+    private func yieldEvent(_ event: HermesAgentEvent) {
+        for continuation in eventContinuations.values {
+            continuation.yield(event)
+        }
     }
 
     /// Graceful teardown on app quit: closing stdin delivers the EOF the
@@ -557,7 +571,7 @@ private actor TUIGatewayRPCClient {
     private func handle(line: String) {
         if let event = try? TUIGatewayEventParser.parseEvent(line) {
             if event == .gatewayReady { isReady = true }
-            eventContinuation.yield(event)
+            yieldEvent(event)
             return
         }
 
@@ -578,7 +592,10 @@ private actor TUIGatewayRPCClient {
             continuation.resume(throwing: HermesAgentError.gatewayExited)
         }
         pending.removeAll()
-        eventContinuation.finish()
+        for continuation in eventContinuations.values {
+            continuation.finish()
+        }
+        eventContinuations.removeAll()
     }
 }
 
