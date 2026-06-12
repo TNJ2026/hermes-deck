@@ -72,6 +72,7 @@ struct ComposerView: View {
                     text: $draft,
                     placeholder: "Ask anything",
                     aliases: mentionAliases,
+                    maxLines: 8,
                     onSubmit: send,
                     onKeyCommand: handleComposerCommand,
                     onHeightChange: { textHeight = $0 }
