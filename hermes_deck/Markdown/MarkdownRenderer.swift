@@ -861,6 +861,10 @@ enum CodeBlockSyntaxHighlighter {
             LanguageDefinition(keywords: pythonKeywords, commentPrefixes: ["#"], stringDelimiters: ["\"", "'"])
         case "bash", "sh", "shell", "zsh":
             LanguageDefinition(keywords: shellKeywords, commentPrefixes: ["#"], stringDelimiters: ["\"", "'"])
+        case "json", "jsonc":
+            // Strings and numbers come from the generic scanner; the literals
+            // are JSON's only keywords.
+            LanguageDefinition(keywords: ["true", "false", "null"], commentPrefixes: ["//"], stringDelimiters: ["\""])
         default:
             nil
         }
