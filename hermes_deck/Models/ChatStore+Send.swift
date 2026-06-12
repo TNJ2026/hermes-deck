@@ -605,4 +605,22 @@ extension ChatStore {
             agentSendStates[threadID] = state
         }
     }
+
+    // MARK: - Send task registry (Stop button)
+
+    /// Registers the task driving a composer send so Stop can cancel it even
+    /// after the composer view is recreated mid-turn.
+    func registerSendTask(_ task: Task<Void, Never>, forAgentThreadID threadID: UUID?) {
+        activeSendTasks[threadID] = task
+    }
+
+    func clearSendTask(forAgentThreadID threadID: UUID?) {
+        activeSendTasks[threadID] = nil
+    }
+
+    /// Cancels the in-flight send for a thread; cancellation propagates down
+    /// to the agent client, which interrupts the gateway turn.
+    func cancelSendTask(forAgentThreadID threadID: UUID?) {
+        activeSendTasks.removeValue(forKey: threadID)?.cancel()
+    }
 }

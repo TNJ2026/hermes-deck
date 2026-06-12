@@ -145,7 +145,8 @@ struct ChatDetailView: View {
                 requestFileImport: requestFileImport,
                 sendAction: send,
                 composerProfileID: sendProfile?.id,
-                showsAttachmentButton: composerShowsAttachmentButton
+                showsAttachmentButton: composerShowsAttachmentButton,
+                composerThreadID: threadID
             )
         } else {
             standardComposerView
@@ -172,7 +173,8 @@ struct ChatDetailView: View {
             sendAction: send,
             // Only the main chat (threadID == nil) executes slash commands.
             slashCommands: (sendBackend == .hermes && threadID == nil) ? store.hermesSlashCommands : [],
-            composerProfileID: sendProfile?.id
+            composerProfileID: sendProfile?.id,
+            composerThreadID: threadID
         )
     }
 

@@ -29,6 +29,9 @@ struct AgentsComposerView: View {
     /// External CLI panels hide the attachment button (their backends don't
     /// take file attachments); the Agents panel keeps it.
     var showsAttachmentButton = true
+    /// Thread this composer sends into (nil = main chat). Keys the send task
+    /// in the store so Stop still works after the view is recreated.
+    var composerThreadID: UUID?
 
     @State private var sendTask: Task<Void, Never>?
     @State private var speechTranscriber = SpeechTranscriber()
@@ -352,6 +355,10 @@ struct AgentsComposerView: View {
 
     private func sendOrCancel() {
         if isSending {
+            // The store-registered task survives composer view recreation (the
+            // empty-thread composer is swapped out on the first message); the
+            // local handle alone would be nil in that case.
+            store.cancelSendTask(forAgentThreadID: composerThreadID)
             sendTask?.cancel()
             sendTask = nil
         } else {
@@ -364,10 +371,20 @@ struct AgentsComposerView: View {
         speechTranscriber.stopRecording()
         let message = draft
         draft = ""
-        sendTask = Task {
+        startSendTask(message: message)
+    }
+
+    private func startSendTask(message: String) {
+        let threadID = composerThreadID
+        let task = Task {
             await sendAction(message)
-            await MainActor.run { sendTask = nil }
+            await MainActor.run {
+                sendTask = nil
+                store.clearSendTask(forAgentThreadID: threadID)
+            }
         }
+        sendTask = task
+        store.registerSendTask(task, forAgentThreadID: threadID)
     }
 
     private func answerClarification(_ answer: String) {
@@ -376,10 +393,7 @@ struct AgentsComposerView: View {
         dismissClarificationRequest()
         speechTranscriber.stopRecording()
         draft = ""
-        sendTask = Task {
-            await sendAction(trimmed)
-            await MainActor.run { sendTask = nil }
-        }
+        startSendTask(message: trimmed)
     }
 
     private func toggleVoiceInput() {

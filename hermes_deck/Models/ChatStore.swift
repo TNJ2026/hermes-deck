@@ -66,6 +66,11 @@ final class ChatStore {
     var sessionLoadGeneration = 0
     var historyThreadIDs: Set<UUID> = []
     var threadBackends: [UUID: AgentBackend] = [:]
+    /// In-flight composer send tasks keyed by agent thread (nil = main chat).
+    /// Owned here rather than as composer view @State: the empty→non-empty
+    /// thread transition recreates the composer view, which would drop a
+    /// view-local task and leave the Stop button with nothing to cancel.
+    @ObservationIgnored var activeSendTasks: [UUID?: Task<Void, Never>] = [:]
     var sessionSearchQuery = ""
 
     var selectedThread: ChatThread? {
