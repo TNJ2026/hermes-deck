@@ -141,19 +141,22 @@ enum ExternalAgentAppearance {
 /// The close-the-loop follow-up fed back to a source agent (`X replied:`
 /// followed by the routed agent's reply). Only internally flagged messages use
 /// this view; ordinary user prose is never parsed into this shape.
+///
+/// Renders as a one-line receipt — the full reply already lives in the routed
+/// agent's own thread, so repeating it here only duplicates a wall of text.
 struct AgentRepliedContent: View {
     let name: String
     let reply: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("\(name) replied:")
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.uturn.backward")
+                .font(.system(size: 11, weight: .semibold))
+            Text("\(name) replied")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.blue)
                 .lineLimit(1)
-
-            MarkdownView(reply)
         }
+        .foregroundStyle(.blue)
     }
 
     /// Parses `<name> replied:\n\n<reply>`; the name must be a single line.
