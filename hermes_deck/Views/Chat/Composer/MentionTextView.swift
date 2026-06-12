@@ -82,6 +82,14 @@ struct MentionTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MentionNSTextView else { return }
+        // Mid-IME composition (Chinese/Japanese marked text) the storage holds
+        // uncommitted text the binding doesn't know about; the diff below would
+        // wipe it and the styling pass would abort the composition. Only keep
+        // the height in sync (the composition may have wrapped to a new line).
+        if textView.hasMarkedText() {
+            context.coordinator.updateHeight()
+            return
+        }
         if textView.font != font { textView.font = font }
         // Sync external text changes (autocomplete insertion, speech, clearing on
         // send) with a smart diff to preserve cursor position and Undo history.
@@ -157,6 +165,14 @@ struct MentionTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
+            // During IME composition the string still contains uncommitted
+            // marked text; pushing it into the binding (and restyling the
+            // storage) would break the composition. Track the height only —
+            // the commit fires another change that runs the full sync.
+            if textView.hasMarkedText() {
+                updateHeight()
+                return
+            }
             parent.text = textView.string
             syncPlaceholder()
             applyMentionStyling()
@@ -401,6 +417,14 @@ final class MentionNSTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        coordinator?.updateHeight()
+    }
+
+    // IME composition (marked text) doesn't go through `didChangeText`, but it
+    // can still wrap onto a new line at the field's right edge — grow the field
+    // so the uncommitted text stays visible instead of being clipped.
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
         coordinator?.updateHeight()
     }
 

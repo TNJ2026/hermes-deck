@@ -672,12 +672,14 @@ private struct MarkdownCodeBlockView: View {
         .onDisappear { resetTask?.cancel() }
     }
 
-    /// Routing blocks are plain fences leading with `@target` — tint mentions
-    /// blue there so the addressed agent stands out. Language-tagged code keeps
-    /// `@` tokens unstyled (Swift `@State`, Python decorators, …).
+    /// ```AgentRouting blocks lead with `@target` — tint mentions blue there so
+    /// the addressed agent stands out. Other code keeps `@` tokens unstyled
+    /// (Swift `@State`, Python decorators, …).
     private var highlightedCode: AttributedString {
         let attributed = CodeBlockSyntaxHighlighter.attributedString(for: code, language: language)
-        guard language == nil else { return attributed }
+        guard language?.caseInsensitiveCompare(AgentMentionRouteParser.routingFenceInfo) == .orderedSame else {
+            return attributed
+        }
         return markdownHighlightingMentions(attributed)
     }
 

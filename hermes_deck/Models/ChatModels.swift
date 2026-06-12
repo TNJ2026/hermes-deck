@@ -504,19 +504,23 @@ extension AgentMentionRouteParser {
         }
     }
 
+    /// The fence info string that marks a routing block in an agent reply.
+    static let routingFenceInfo = "AgentRouting"
+
     /// Agent-reply routing: a mention routes only when it sits in its own
-    /// fenced code block whose content *starts* with `@alias`; the rest of the
-    /// block is the routed message. One block addresses one target — a block
-    /// holding any further known mention is rejected, and mentions in prose or
-    /// mid-block never route. Each qualifying block yields one route, so a
-    /// reply with several blocks still fans out.
+    /// ```AgentRouting fenced block whose content *starts* with `@alias`; the
+    /// rest of the block is the routed message. One block addresses one target
+    /// — a block holding any further known mention is rejected, and mentions
+    /// in prose, plain code blocks, or mid-block never route. Each qualifying
+    /// block yields one route, so a reply with several blocks still fans out.
     static func codeBlockRouteSpans(
         in text: String,
         aliasGroups: [[String]]
     ) -> [(groupIndex: Int, message: String)] {
         let candidates = mentionCandidates(for: aliasGroups)
         return fencedCodeBlockContents(in: text).compactMap { block in
-            let content = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard block.info.caseInsensitiveCompare(routingFenceInfo) == .orderedSame else { return nil }
+            let content = block.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard content.first == "@",
                   let match = matchMention(in: content, at: content.startIndex, candidates: candidates) else {
                 return nil
@@ -555,19 +559,21 @@ extension AgentMentionRouteParser {
         return false
     }
 
-    /// Contents of every closed ``` fenced block, in order. The opening fence
-    /// may carry an info string (```text); an unclosed trailing fence does not
-    /// count as a block.
-    private static func fencedCodeBlockContents(in text: String) -> [String] {
-        var blocks: [String] = []
+    /// Every closed ``` fenced block with its info string (```AgentRouting →
+    /// "AgentRouting"), in order. An unclosed trailing fence does not count.
+    private static func fencedCodeBlockContents(in text: String) -> [(info: String, content: String)] {
+        var blocks: [(info: String, content: String)] = []
         var currentLines: [Substring]?
+        var currentInfo = ""
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("```") {
                 if let lines = currentLines {
-                    blocks.append(lines.joined(separator: "\n"))
+                    blocks.append((currentInfo, lines.joined(separator: "\n")))
                     currentLines = nil
                 } else {
                     currentLines = []
+                    currentInfo = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 }
             } else {
                 currentLines?.append(line)

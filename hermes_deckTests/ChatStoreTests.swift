@@ -520,7 +520,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // feeds coding's reply back into the panel thread.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "```\n@coding investigate\n```"),
+            agentClient: StubHermesAgentClient(reply: "```AgentRouting\n@coding investigate\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [
@@ -555,7 +555,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // fed back to the source agent.
         let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "```\n@default summarize findings\n```"),
+            agentClient: StubHermesAgentClient(reply: "```AgentRouting\n@default summarize findings\n```"),
             threads: [mainThread]
         )
         store.availableProfiles = [
@@ -603,7 +603,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // precede it.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "Here is my analysis.\n```\n@coding investigate the crash\n```"),
+            agentClient: StubHermesAgentClient(reply: "Here is my analysis.\n```AgentRouting\n@coding investigate the crash\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [
@@ -668,18 +668,21 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     func codeBlockRouteSpansFollowOneBlockOneTargetRule() throws {
         let aliasGroups = [["coding"], ["research"]]
 
-        // One block per target; prose mentions and blocks that don't *start*
-        // with a mention never route.
+        // One AgentRouting block per target; prose mentions, plain code blocks,
+        // and blocks that don't *start* with a mention never route.
         let text = """
         Summary first, ping @research later.
-        ```
+        ```AgentRouting
         @coding fix the crash
         in the parser
         ```
-        ```
+        ```AgentRouting
         prefix @research verify
         ```
         ```
+        @research this plain block must not route
+        ```
+        ```AgentRouting
         @research verify the fix
         ```
         """
@@ -689,11 +692,11 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(spans.last?.message == "verify the fix")
 
         // A block holding a second known mention is ambiguous — rejected.
-        let twoTargets = "```\n@coding fix it, then ping @research\n```"
+        let twoTargets = "```AgentRouting\n@coding fix it, then ping @research\n```"
         #expect(AgentMentionRouteParser.codeBlockRouteSpans(in: twoTargets, aliasGroups: aliasGroups).isEmpty)
 
         // An unclosed fence is not a block.
-        let unclosed = "```\n@coding fix it"
+        let unclosed = "```AgentRouting\n@coding fix it"
         #expect(AgentMentionRouteParser.codeBlockRouteSpans(in: unclosed, aliasGroups: aliasGroups).isEmpty)
     }
 
@@ -704,7 +707,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         // receive a second prompt.
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "```\n@research go\n```"),
+            agentClient: StubHermesAgentClient(reply: "```AgentRouting\n@research go\n```"),
             threads: [defaultThread]
         )
         store.availableProfiles = [
