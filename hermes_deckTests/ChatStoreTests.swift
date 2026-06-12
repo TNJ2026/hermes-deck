@@ -799,8 +799,11 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
     @Test
     func sourceThreadShowsBusyWhileRoutedTargetsRun() async throws {
-        // While a hand-off waits on its targets, the source thread's composer
-        // shows the sending state (both tracks) so no new prompt can sneak in.
+        // While a hand-off waits on its targets, the source thread is busy on
+        // its per-thread track (the main composer merges that track in). The
+        // global track is left alone — releasing it used to depend on the
+        // current selection and leaked .sending when the user switched
+        // threads mid-hand-off.
         let client = GatedHermesAgentClient()
         let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
         let store = ChatStore(agentClient: client, threads: [mainThread])
@@ -812,8 +815,11 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         async let routed: Void = store.send("@coding hi")
         while await client.started < 1 { try await Task.sleep(for: .milliseconds(10)) }
 
-        #expect(store.sendState == .sending)
         #expect(store.sendState(forAgentThreadID: mainThread.id) == .sending)
+        #expect(store.sendState == .idle)
+
+        // Switching away mid-hand-off must not strand any busy state.
+        store.createThread()
 
         await client.releaseNext()
         await routed

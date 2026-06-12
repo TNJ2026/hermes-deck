@@ -168,7 +168,7 @@ struct ChatDetailView: View {
                 draft: $draft,
                 isFileImporterPresented: $isFileImporterPresented,
                 presentation: composerPresentation,
-                sendState: sendState,
+                sendState: composerSendState,
                 attachments: composerAttachments,
                 permissionRequest: composerPermissionRequest,
                 clarificationRequest: composerClarificationRequest,
@@ -194,7 +194,7 @@ struct ChatDetailView: View {
             draft: $draft,
             isFileImporterPresented: $isFileImporterPresented,
             presentation: composerPresentation,
-            sendState: sendState,
+            sendState: composerSendState,
             attachments: composerAttachments,
             permissionRequest: composerPermissionRequest,
             clarificationRequest: composerClarificationRequest,
@@ -465,7 +465,22 @@ struct ChatDetailView: View {
         if let threadID {
             return store.sendState(forAgentThreadID: threadID) == .sending
         }
-        return store.sendState == .sending
+        // Main chat: its own turns ride the global track, while a hand-off
+        // (and its close-the-loop follow-up) marks the per-thread one.
+        if store.sendState == .sending { return true }
+        return store.sendState(forAgentThreadID: store.selectedThreadID) == .sending
+    }
+
+    /// What the composer should treat as this thread's send state. Panels pass
+    /// an explicit state; the main chat merges the per-thread track (hand-offs
+    /// mark the selected thread busy there) into its global fallback.
+    private var composerSendState: ChatSendState? {
+        if let sendState { return sendState }
+        guard threadID == nil else { return nil }
+        if store.sendState(forAgentThreadID: store.selectedThreadID) == .sending {
+            return .sending
+        }
+        return nil
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy, animated: Bool) {

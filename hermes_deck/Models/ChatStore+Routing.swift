@@ -83,15 +83,13 @@ extension ChatStore {
         threadHandoffs[threadID] = batch.items.isEmpty ? nil : batch
     }
 
-    /// Marks the source thread of an in-flight hand-off as busy/idle on both
-    /// send-state tracks: the per-thread one (agent panels) and — when the
-    /// source is the selected main-chat thread — the global one its composer
-    /// watches.
+    /// Marks the source thread of an in-flight hand-off as busy/idle — on the
+    /// per-thread track only. Touching the global track here leaked: release
+    /// checked the *current* selection, so switching threads mid-hand-off left
+    /// the global state stuck at .sending. The main composer merges this
+    /// track in via `ChatDetailView.composerSendState` instead.
     private func setRouteWaitState(_ state: ChatSendState, for sourceThreadID: UUID) {
         agentSendStates[sourceThreadID] = state
-        if selectedThreadID == sourceThreadID {
-            sendState = state
-        }
     }
 
     /// Every alias the router recognizes, flattened. The Markdown renderer uses
