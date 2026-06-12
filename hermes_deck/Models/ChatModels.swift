@@ -340,6 +340,27 @@ enum PromptRouteResult: Equatable, Sendable {
     case denied(PromptRouteDenialReason)
 }
 
+/// One routed target of an in-flight hand-off, rendered as a status card under
+/// the bubble that triggered the routing.
+struct AgentHandoffItem: Identifiable, Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        case waiting
+        case replied(String)
+        case failed
+    }
+
+    let id: UUID
+    let targetName: String
+    var phase: Phase
+}
+
+/// All targets of the latest hand-off in a thread, anchored to the message
+/// whose routing blocks triggered it.
+struct AgentHandoffBatch: Equatable, Sendable {
+    var anchorMessageID: UUID?
+    var items: [AgentHandoffItem]
+}
+
 /// Framing for the close-the-loop follow-up (`X replied:\n\n<reply>`, sections
 /// joined by `———`), shared by the routing fan-out that writes it and the
 /// bubble view that displays it — so the two cannot drift apart.

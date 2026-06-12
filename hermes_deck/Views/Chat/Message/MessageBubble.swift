@@ -22,10 +22,6 @@ struct MessageBubble: View {
                                     sourceProfileName: routedSourceProfileName,
                                     prompt: message.content
                                 )
-                            } else if message.role == .user,
-                                      message.isAgentReplyFollowUp == true,
-                                      let framed = AgentRepliedContent.parse(message.content) {
-                                framed
                             } else if message.role == .assistant,
                                       let replyName = message.agentReplyName {
                                 ExternalAgentReplyContent(attribution: ExternalAgentReplyAttribution(
@@ -135,65 +131,6 @@ enum ExternalAgentAppearance {
     static func color(for backend: AgentBackend) -> Color {
         guard let source = source(for: backend) else { return .accentColor }
         return color(for: source)
-    }
-}
-
-/// The close-the-loop follow-up fed back to a source agent (`X replied:` per
-/// routed target). Only internally flagged messages use this view; ordinary
-/// user prose is never parsed into this shape.
-///
-/// One receipt row per target, collapsed by default — the disclosure triangle
-/// expands that agent's reply in a bubble below the row. The full reply also
-/// lives in the routed agent's own thread.
-struct AgentRepliedContent: View {
-    let sections: [(name: String, reply: String)]
-    @State private var expandedIndices: Set<Int> = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
-                VStack(alignment: .leading, spacing: 6) {
-                    Button {
-                        withAnimation(.smooth(duration: 0.15)) {
-                            if expandedIndices.contains(index) {
-                                expandedIndices.remove(index)
-                            } else {
-                                expandedIndices.insert(index)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.uturn.backward")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("\(section.name) replied")
-                                .font(.system(size: 14, weight: .semibold))
-                                .lineLimit(1)
-                            Image(systemName: expandedIndices.contains(index) ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .foregroundStyle(.blue)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    if expandedIndices.contains(index) {
-                        MarkdownView(section.reply)
-                            .padding(10)
-                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(.quaternary)
-                            }
-                    }
-                }
-            }
-        }
-    }
-
-    static func parse(_ content: String) -> AgentRepliedContent? {
-        guard let sections = AgentReplyFraming.sections(in: content) else { return nil }
-        return AgentRepliedContent(sections: sections)
     }
 }
 

@@ -70,6 +70,19 @@ extension ChatStore {
         return AgentRoutingPrimer.text(targets: profileAliases + cliAliases)
     }
 
+    private func setHandoffPhase(_ phase: AgentHandoffItem.Phase, itemID: UUID, in threadID: UUID) {
+        guard var batch = threadHandoffs[threadID],
+              let index = batch.items.firstIndex(where: { $0.id == itemID }) else { return }
+        batch.items[index].phase = phase
+        threadHandoffs[threadID] = batch
+    }
+
+    private func removeHandoffItem(_ itemID: UUID, in threadID: UUID) {
+        guard var batch = threadHandoffs[threadID] else { return }
+        batch.items.removeAll { $0.id == itemID }
+        threadHandoffs[threadID] = batch.items.isEmpty ? nil : batch
+    }
+
     /// Marks the source thread of an in-flight hand-off as busy/idle on both
     /// send-state tracks: the per-thread one (agent panels) and — when the
     /// source is the selected main-chat thread — the global one its composer
@@ -137,11 +150,23 @@ extension ChatStore {
         setRouteWaitState(.sending, for: sourceThreadID)
         defer { setRouteWaitState(.idle, for: sourceThreadID) }
 
+        // Status cards under the triggering bubble: one waiting row per target,
+        // flipped to replied/failed as results land. A new hand-off replaces
+        // the thread's previous batch.
+        let handoffItems = routes.map {
+            AgentHandoffItem(id: UUID(), targetName: $0.target.profile.displayName, phase: .waiting)
+        }
+        threadHandoffs[sourceThreadID] = AgentHandoffBatch(
+            anchorMessageID: thread(id: sourceThreadID)?.messages.last?.id,
+            items: handoffItems
+        )
+
         // Fan out in parallel: each @mentioned agent gets the segment after its
         // mention, echoes its reply back into the source thread, and (for replies
         // that opt in) returns it for the close-the-loop follow-up below.
         let replies = await withTaskGroup(of: Optional<(name: String, reply: String)>.self) { group in
             for (offset, route) in routes.enumerated() {
+                let handoffItemID = handoffItems[offset].id
                 let agentThreadID = threadIDForAgentProfile(route.target.profile)
                 threadBackends[agentThreadID] = route.target.backend
                 // Attachments ride along with the first mention only.
@@ -177,12 +202,17 @@ extension ChatStore {
                         routedSourceProfileName: sourceName
                     )
                     guard let routedResult, !routedResult.isEmpty else {
+                        setHandoffPhase(.failed, itemID: handoffItemID, in: sourceThreadID)
                         return nil
                     }
-                    // When the loop closes back to the source agent, the framed
-                    // "X replied:" follow-up below already surfaces the reply in
-                    // the source thread; a bare echo would show it twice.
-                    if !closesLoopToSource {
+                    if closesLoopToSource {
+                        // The reply lives in the status card (expandable) and is
+                        // fed back to the source agent below — no bare echo.
+                        setHandoffPhase(.replied(routedResult), itemID: handoffItemID, in: sourceThreadID)
+                    } else {
+                        // User-initiated mention: the echoed bubble shows the
+                        // full reply, so the card would only duplicate it.
+                        removeHandoffItem(handoffItemID, in: sourceThreadID)
                         append(
                             ChatMessage(role: .assistant, content: routedResult, completedAt: .now, agentReplyName: profile.displayName),
                             to: sourceThreadID

@@ -749,6 +749,55 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func handoffStatusTracksWaitingThenRepliedForLoopClosingRoutes() async throws {
+        // Agent-initiated hand-off: a waiting card appears under the
+        // triggering bubble, then flips to replied carrying the target's text.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "```AgentRouting\n@coding investigate\n```"),
+            threads: [mainThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        let batch = try #require(store.threadHandoffs[researcherThreadID])
+        #expect(batch.items.map(\.targetName) == ["Coding"])
+        // Coding's stub reply is the routing block itself; that text came back.
+        #expect(batch.items.first?.phase == .replied("```AgentRouting\n@coding investigate\n```"))
+        // Anchored to a message that is still displayed (not the hidden framed
+        // follow-up).
+        let anchorID = try #require(batch.anchorMessageID)
+        let anchor = try #require(store.thread(id: researcherThreadID)?.messages.first { $0.id == anchorID })
+        #expect(anchor.isAgentReplyFollowUp != true)
+    }
+
+    @Test
+    func userInitiatedRouteRemovesHandoffCardOnceEchoArrives() async throws {
+        // User-typed mention: the echoed bubble shows the reply, so the card
+        // disappears instead of duplicating it.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "ok"),
+            threads: [mainThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+        ]
+
+        await store.send("@coding hi")
+
+        #expect(store.threadHandoffs[mainThread.id] == nil)
+    }
+
+    @Test
     func sourceThreadShowsBusyWhileRoutedTargetsRun() async throws {
         // While a hand-off waits on its targets, the source thread's composer
         // shows the sending state (both tracks) so no new prompt can sneak in.
@@ -1026,7 +1075,11 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let source = try sourceFile("hermes_deck/Views/Chat/Message/MessageBubble.swift")
 
         #expect(source.contains("ExternalAgentReplyAttribution.parse(message.content)"))
-        #expect(source.contains("message.isAgentReplyFollowUp == true"))
+        // Close-the-loop follow-ups are hidden from the list (the hand-off
+        // status cards display the replies instead).
+        let detailSource = try sourceFile("hermes_deck/Views/Chat/ChatDetailView.swift")
+        #expect(detailSource.contains("$0.isAgentReplyFollowUp != true"))
+        #expect(detailSource.contains("AgentHandoffStatusView(items: batch.items)"))
         #expect(source.contains("ExternalAgentReplyContent(attribution: attribution)"))
         #expect(source.contains("ExternalAgentAppearance.color(for: attribution.source)"))
         #expect(source.contains("Color(red: 217 / 255, green: 119 / 255, blue: 86 / 255)"))

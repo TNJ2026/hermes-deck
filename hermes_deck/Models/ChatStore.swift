@@ -75,6 +75,9 @@ final class ChatStore {
     /// gateway rejects concurrent prompts on one session ("session busy"), so
     /// the send pipeline serializes per thread on this set.
     @ObservationIgnored var runningTurnThreadIDs: Set<UUID> = []
+    /// The latest hand-off per source thread, driving the waiting/replied
+    /// status cards under the triggering bubble.
+    var threadHandoffs: [UUID: AgentHandoffBatch] = [:]
     var sessionSearchQuery = ""
 
     var selectedThread: ChatThread? {

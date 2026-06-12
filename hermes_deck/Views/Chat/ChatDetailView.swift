@@ -47,9 +47,16 @@ struct ChatDetailView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 14) {
-                                ForEach(thread.messages) { message in
+                                // Close-the-loop follow-ups reach the agent but
+                                // are not displayed — the hand-off status cards
+                                // below the triggering bubble show the replies.
+                                ForEach(thread.messages.filter { $0.isAgentReplyFollowUp != true }) { message in
                                     MessageBubble(message: message, assistantTrailingInset: assistantTrailingInset)
                                         .id(message.id)
+                                    if let batch = store.threadHandoffs[thread.id],
+                                       batch.anchorMessageID == message.id {
+                                        AgentHandoffStatusView(items: batch.items)
+                                    }
                                 }
                                 if showsThinkingIndicator {
                                     ThinkingIndicatorRow()
