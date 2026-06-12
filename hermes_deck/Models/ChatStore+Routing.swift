@@ -30,7 +30,7 @@ extension ChatStore {
     private func resolvedMentionRoutes(
         for text: String,
         codeBlockOnly: Bool = false
-    ) -> [(target: AgentRouteTarget, message: String, returnsReply: Bool, isExternal: Bool)] {
+    ) -> [(target: AgentRouteTarget, message: String, isExternal: Bool)] {
         var groups: [(aliases: [String], target: AgentRouteTarget, isExternal: Bool)] = []
         for target in externalAgentMentionTargets {
             groups.append((target.aliases, AgentRouteTarget(profile: target.profile, backend: target.backend), true))
@@ -49,12 +49,11 @@ extension ChatStore {
         return spans.compactMap { span in
             guard span.groupIndex < groups.count else { return nil }
             let group = groups[span.groupIndex]
-            let directive = AgentReturnDirective.parse(span.message)
-            guard !directive.message.isEmpty else { return nil }
+            guard !span.message.isEmpty else { return nil }
             // One agent can only be addressed once per message; later duplicate
             // mentions of the same target would race on its shared thread.
             guard seenTargets.insert(group.target.profile.id).inserted else { return nil }
-            return (group.target, directive.message, directive.returnsReply, group.isExternal)
+            return (group.target, span.message, group.isExternal)
         }
     }
 
@@ -118,7 +117,6 @@ extension ChatStore {
 
                 let message = route.message
                 let profile = route.target.profile
-                let returnsReply = route.returnsReply
                 let isExternal = route.isExternal
                 group.addTask { @MainActor [self] in
                     // Stagger external agents' first launch: booting several
@@ -133,7 +131,7 @@ extension ChatStore {
                         profile: profile,
                         routedSourceProfileName: sourceName
                     )
-                    guard returnsReply, let routedResult, !routedResult.isEmpty else {
+                    guard let routedResult, !routedResult.isEmpty else {
                         return nil
                     }
                     // When the loop closes back to the source agent, the framed

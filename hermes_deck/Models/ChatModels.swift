@@ -340,23 +340,6 @@ enum PromptRouteResult: Equatable, Sendable {
     case denied(PromptRouteDenialReason)
 }
 
-/// Controls whether a forwarded agent reply is echoed back into the source
-/// thread. By default it is; an explicit `--no-return` flag (also `--noreturn`)
-/// in the prompt suppresses it and is stripped before forwarding.
-enum AgentReturnDirective {
-    private static let pattern = "(?i)\\s*--(?:no-?return|no-returen)\\b"
-
-    static func parse(_ message: String) -> (message: String, returnsReply: Bool) {
-        guard message.range(of: pattern, options: .regularExpression) != nil else {
-            return (message, true)
-        }
-        let cleaned = message
-            .replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (cleaned, false)
-    }
-}
-
 enum AgentMentionRouteParser {
     static func parse(_ text: String, profiles: [HermesProfile]) -> AgentMentionRoute? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

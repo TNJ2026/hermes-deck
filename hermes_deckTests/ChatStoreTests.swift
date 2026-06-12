@@ -912,45 +912,6 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
-    func externalAgentNoReturnFlagSuppressesEchoAndIsStrippedFromForward() async throws {
-        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
-        let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "codex ok"),
-            threads: [defaultThread]
-        )
-        let originalSelectedThreadID = try #require(store.selectedThreadID)
-
-        await store.send("@codex refactor this --no-return")
-
-        // Source thread keeps the user prompt but gets no echoed reply.
-        let mainMessages = try #require(store.thread(id: originalSelectedThreadID)?.messages)
-        #expect(mainMessages.map(\.role) == [.user])
-        #expect(mainMessages.first?.content == "@codex refactor this --no-return")
-
-        // Forwarded prompt is cleaned of the flag.
-        let codexThread = try #require(store.threads.first { $0.profile.id == "acp:codex" })
-        #expect(codexThread.messages.first?.content == "refactor this")
-    }
-
-    @Test
-    func misspelledNoReturenFlagSuppressesEchoAndIsStrippedFromForward() async throws {
-        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
-        let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "codex ok"),
-            threads: [defaultThread]
-        )
-        let originalSelectedThreadID = try #require(store.selectedThreadID)
-
-        await store.send("@codex refactor this --no-returen")
-
-        let mainMessages = try #require(store.thread(id: originalSelectedThreadID)?.messages)
-        #expect(mainMessages.map(\.role) == [.user])
-
-        let codexThread = try #require(store.threads.first { $0.profile.id == "acp:codex" })
-        #expect(codexThread.messages.first?.content == "refactor this")
-    }
-
-    @Test
     func externalAgentReplyAttributionParsesKnownSourcesOnly() throws {
         #expect(ExternalAgentReplyAttribution.parse("Claude Code:\n\nDone")?.source == .claude)
         #expect(ExternalAgentReplyAttribution.parse("Codex:\n\nDone")?.source == .codex)
@@ -994,29 +955,6 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(source.contains("Color(red: 217 / 255, green: 119 / 255, blue: 86 / 255)"))
         #expect(source.contains("Color(red: 130 / 255, green: 163 / 255, blue: 255 / 255)"))
         #expect(source.contains("Color(red: 150 / 255, green: 100 / 255, blue: 160 / 255)"))
-    }
-
-    @Test
-    func hermesAgentNoReturnFlagSuppressesEchoAndIsStrippedFromForward() async throws {
-        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
-        let store = ChatStore(
-            agentClient: StubHermesAgentClient(reply: "coding ok"),
-            threads: [defaultThread]
-        )
-        store.availableProfiles = [
-            HermesProfile(id: "default", displayName: "Hermes agent"),
-            HermesProfile(id: "coding", displayName: "Coding"),
-        ]
-        let originalSelectedThreadID = try #require(store.selectedThreadID)
-
-        await store.send("@coding inspect this --no-return")
-
-        let mainMessages = try #require(store.thread(id: originalSelectedThreadID)?.messages)
-        #expect(mainMessages.map(\.role) == [.user])
-        #expect(mainMessages.first?.content == "@coding inspect this --no-return")
-
-        let codingThread = try #require(store.threads.first { $0.profile.id == "coding" })
-        #expect(codingThread.messages.first?.content == "inspect this")
     }
 
     @Test
