@@ -156,6 +156,15 @@ extension ChatStore {
         isAgentReplyFollowUp: Bool? = nil
     ) async -> String? {
         guard thread(id: threadID) != nil else { return nil }
+        // One gateway session runs one turn at a time — a concurrent prompt is
+        // rejected with "session busy" and silently dropped. The realistic
+        // collision: a routed close-the-loop reply lands while the user's own
+        // prompt is still streaming on the source thread (or vice versa).
+        // Serialize per thread instead of losing the prompt.
+        await waitForIdleTurn(in: threadID)
+        guard thread(id: threadID) != nil else { return nil }
+        runningTurnThreadIDs.insert(threadID)
+        defer { runningTurnThreadIDs.remove(threadID) }
         let attachments = pendingAttachments(for: threadID, usesGlobalSendState: usesGlobalSendState)
         clearPendingAttachments(for: threadID, usesGlobalSendState: usesGlobalSendState)
         clearPermissionRequest(for: threadID, usesGlobalSendState: usesGlobalSendState)
@@ -607,6 +616,18 @@ extension ChatStore {
             sendState = state
         } else {
             agentSendStates[threadID] = state
+        }
+    }
+
+    /// Waits out an in-flight turn on `threadID` (bounded; a cancelled caller
+    /// stops waiting and lets its own cancellation handling run).
+    private func waitForIdleTurn(in threadID: UUID, timeout: Duration = .seconds(300)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !Task.isCancelled,
+              clock.now < deadline,
+              runningTurnThreadIDs.contains(threadID) {
+            try? await Task.sleep(for: .milliseconds(250))
         }
     }
 

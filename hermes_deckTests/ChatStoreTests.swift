@@ -749,6 +749,37 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func concurrentTurnsOnOneThreadSerialize() async throws {
+        // One gateway session runs one turn at a time; a second prompt on the
+        // same thread must wait out the in-flight turn instead of colliding
+        // ("session busy" would silently drop it — the routed close-the-loop
+        // reply being the main casualty).
+        let client = GatedHermesAgentClient()
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(agentClient: client, threads: [mainThread])
+        let threadID = mainThread.id
+
+        async let first: String? = store.send("first", in: threadID, profile: .defaultProfile)
+        while await client.started < 1 { try await Task.sleep(for: .milliseconds(10)) }
+
+        async let second: String? = store.send("second", in: threadID, profile: .defaultProfile)
+        try await Task.sleep(for: .milliseconds(150))
+        // The second turn is parked: nothing new reached the gateway and its
+        // user message is not in the thread yet.
+        #expect(await client.started == 1)
+        #expect(store.thread(id: threadID)?.messages.filter { $0.role == .user }.count == 1)
+
+        await client.releaseNext()
+        while await client.started < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        await client.releaseNext()
+
+        _ = await first
+        _ = await second
+        #expect(store.thread(id: threadID)?.messages.map(\.role) == [.user, .assistant, .user, .assistant])
+        #expect(store.thread(id: threadID)?.messages.map(\.content) == ["first", "ok", "second", "ok"])
+    }
+
+    @Test
     func externalBackendRequestsCarryNoRoutingPrimer() async throws {
         // External CLIs cannot route, so their sessions get no primer.
         let client = RecordingHermesAgentClient(reply: "ok")
@@ -2518,5 +2549,39 @@ private final class StubHermesSessionProvider: HermesSessionProvider, @unchecked
     func sessionThread(id: String) async throws -> ChatThread {
         loadedThreadIDs.append(id)
         return loadedThreads[id] ?? ChatThread(title: id)
+    }
+}
+
+/// Holds each turn open until the test releases it, so turn-serialization
+/// ordering can be asserted deterministically.
+@MainActor
+final class GatedHermesAgentClient: HermesAgentClient {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var started = 0
+
+    func releaseNext() async {
+        while waiters.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        waiters.removeFirst().resume()
+    }
+
+    func send(_ request: HermesChatRequest) async throws -> HermesChatResponse {
+        HermesChatResponse(content: "ok")
+    }
+
+    nonisolated func eventStream(for request: HermesChatRequest) -> AsyncThrowingStream<HermesAgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task { @MainActor in
+                await self.noteStartedAndWait()
+                continuation.yield(.messageComplete(sessionID: "s", text: "ok", status: "complete", usage: nil))
+                continuation.finish()
+            }
+        }
+    }
+
+    private func noteStartedAndWait() async {
+        started += 1
+        await withCheckedContinuation { waiters.append($0) }
     }
 }

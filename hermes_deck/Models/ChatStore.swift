@@ -71,6 +71,10 @@ final class ChatStore {
     /// thread transition recreates the composer view, which would drop a
     /// view-local task and leave the Stop button with nothing to cancel.
     @ObservationIgnored var activeSendTasks: [UUID?: Task<Void, Never>] = [:]
+    /// Threads with a turn currently submitted to their gateway session. The
+    /// gateway rejects concurrent prompts on one session ("session busy"), so
+    /// the send pipeline serializes per thread on this set.
+    @ObservationIgnored var runningTurnThreadIDs: Set<UUID> = []
     var sessionSearchQuery = ""
 
     var selectedThread: ChatThread? {
