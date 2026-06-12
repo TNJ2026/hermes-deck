@@ -7,8 +7,19 @@
 
 import SwiftUI
 
+/// Keeps the app (and its per-profile gateways) alive when the window closes —
+/// the SwiftUI lifecycle otherwise terminates on last-window close. Clicking
+/// the Dock icon reopens the window with everything still warm; ⌘Q remains the
+/// real quit (and runs the subprocess cleanup).
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
 @main
 struct hermes_deckApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let agentClient: RoutingAgentClient
 
     init() {
