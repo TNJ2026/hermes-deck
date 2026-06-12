@@ -62,6 +62,7 @@ struct ChatDetailView: View {
                                 // below the triggering bubble show the replies.
                                 ForEach(thread.messages.filter { $0.isAgentReplyFollowUp != true }) { message in
                                     MessageBubble(message: message, assistantTrailingInset: assistantTrailingInset)
+                                        .equatable()
                                         .id(message.id)
                                     if let batch = store.threadHandoffs[thread.id],
                                        batch.anchorMessageID == message.id {

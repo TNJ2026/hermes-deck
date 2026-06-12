@@ -290,6 +290,20 @@ private func markdownEmphasizedFont(base: Font, emphasis: Emphasis) -> Font {
     return font
 }
 
+/// Parsed-block cache keyed by source text: a streaming delta invalidates every
+/// visible chat row, and re-parsing each completed message's Markdown per token
+/// is the dominant cost. NSCache evicts under memory pressure.
+private final class MarkdownBlocksBox {
+    let blocks: [MarkdownBlock]
+    init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+}
+
+private let markdownParseCache: NSCache<NSString, MarkdownBlocksBox> = {
+    let cache = NSCache<NSString, MarkdownBlocksBox>()
+    cache.countLimit = 500
+    return cache
+}()
+
 struct MarkdownView: View {
     let source: String
     private let blocks: [MarkdownBlock]
@@ -297,7 +311,13 @@ struct MarkdownView: View {
 
     init(_ source: String) {
         self.source = source
-        self.blocks = MarkdownRenderer().parse(source)
+        if let cached = markdownParseCache.object(forKey: source as NSString) {
+            self.blocks = cached.blocks
+        } else {
+            let parsed = MarkdownRenderer().parse(source)
+            markdownParseCache.setObject(MarkdownBlocksBox(parsed), forKey: source as NSString)
+            self.blocks = parsed
+        }
     }
 
     var body: some View {

@@ -1,6 +1,10 @@
 import SwiftUI
 
-struct MessageBubble: View {
+/// Equatable so rows can short-circuit via `.equatable()`: a streaming delta
+/// mutates `store.threads` and invalidates every visible row in every chat
+/// list — without the short-circuit, each token re-parses the Markdown of all
+/// completed messages in both the main list and any open panel.
+struct MessageBubble: View, Equatable {
     let message: ChatMessage
     /// Minimum gap between an assistant bubble and the trailing edge. Defaults
     /// to the wide main-chat column; the narrow right-sidebar panels pass a
