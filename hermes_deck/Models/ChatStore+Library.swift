@@ -121,40 +121,10 @@ extension ChatStore {
         }
     }
 
-    /// The two `@`-routing skills the Deck surfaces and manages (but does not
-    /// drive — they complement the Deck's own client-side `@mention` forwarding):
-    /// `agent-routing` shells out via `route.sh` (headless/cron), `deck-routing`
-    /// is the `@target` code-block convention the Deck itself forwards.
+    /// The headless/cron routing skill (`route.sh`): not a Deck feature, so the
+    /// Skills view hides it. Deck-side routing needs no skill — the
+    /// AgentRouting primer is seeded into every new session instead.
     static let agentRoutingSkillName = "agent-routing"
-    static let deckRoutingSkillName = "deck-routing"
-
-    enum RoutingSkillState: Equatable, Sendable {
-        case unknown                 // skill list not loaded yet (or failed)
-        case notInstalled
-        case installed(enabled: Bool)
-    }
-
-    /// Install/enabled status of a skill (by name) for the current profile,
-    /// derived from the loaded skill list.
-    func routingSkillState(named name: String) -> RoutingSkillState {
-        guard case .loaded(let skills) = skillListState else { return .unknown }
-        guard let skill = skills.first(where: {
-            $0.name.caseInsensitiveCompare(name) == .orderedSame
-        }) else { return .notInstalled }
-        return .installed(enabled: skill.status.caseInsensitiveCompare("enabled") == .orderedSame)
-    }
-
-    /// Enables/disables a skill by name (loading the list first if needed).
-    /// No-op when the skill is not installed.
-    func setRoutingSkill(named name: String, enabled: Bool) async {
-        if case .loaded = skillListState {} else { await loadInstalledSkills() }
-        guard case .loaded(let skills) = skillListState,
-              let skill = skills.first(where: {
-                  $0.name.caseInsensitiveCompare(name) == .orderedSame
-              })
-        else { return }
-        await setSkill(skill, enabled: enabled)
-    }
 
     func loadJobs(for profile: HermesProfile) async {
         jobListState = .loading

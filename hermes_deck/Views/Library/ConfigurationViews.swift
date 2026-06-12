@@ -300,13 +300,6 @@ struct SkillsView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
-                            RoutingSkillCard(
-                                store: store,
-                                name: ChatStore.deckRoutingSkillName,
-                                title: "Deck Routing",
-                                blurb: "Inside the Deck, an agent delegates by replying with an ```AgentRouting code block that starts with @target — the Deck forwards the block and feeds the reply back.",
-                                missingHint: "Not installed — add it under ~/.hermes/skills/deck-routing."
-                            )
                             // `agent-routing` is a non-Deck (headless/cron) skill;
                             // the Deck hides it to keep the list Deck-relevant.
                             ForEach(skillGroups(from: skills.filter {
@@ -425,72 +418,3 @@ struct InstalledSkillRow: View {
     }
 }
 
-/// Featured card surfacing a routing skill (`deck-routing` / `agent-routing`)
-/// at the top of the Skills view: shows its install/enabled state and a one-tap
-/// enable toggle. The Deck only manages these skills; it does not change the
-/// Deck's own client-side @mention forwarding.
-struct RoutingSkillCard: View {
-    @Bindable var store: ChatStore
-    let name: String
-    let title: String
-    let blurb: String
-    let missingHint: String
-
-    var body: some View {
-        switch store.routingSkillState(named: name) {
-        case .unknown:
-            EmptyView()
-        case .notInstalled:
-            card(enabled: nil)
-        case .installed(let enabled):
-            card(enabled: enabled)
-        }
-    }
-
-    @ViewBuilder
-    private func card(enabled: Bool?) -> some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .foregroundStyle(.tint)
-                    Text(title)
-                        .font(.title3.weight(.semibold))
-                }
-                Text(blurb)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if enabled == nil {
-                    Text(missingHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let enabled {
-                Toggle(
-                    enabled ? "Disable \(title)" : "Enable \(title)",
-                    isOn: Binding(
-                        get: { enabled },
-                        set: { newValue in
-                            Task { await store.setRoutingSkill(named: name, enabled: newValue) }
-                        }
-                    )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .scaleEffect(0.8)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.tint.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(.tint.opacity(0.25))
-                .allowsHitTesting(false)
-        }
-    }
-}

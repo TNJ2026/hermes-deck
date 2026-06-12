@@ -722,40 +722,6 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
-    func routingSkillStateReflectsInstalledSkillList() {
-        let store = ChatStore(agentClient: StubHermesAgentClient(reply: "ok"))
-        let name = ChatStore.agentRoutingSkillName
-
-        // Not loaded yet → unknown.
-        #expect(store.routingSkillState(named: name) == .unknown)
-
-        // Loaded without the skill → not installed.
-        store.skillListState = .loaded([
-            HermesInstalledSkill(id: "research", name: "research", category: "local", source: "local", trust: "local", status: "enabled"),
-        ])
-        #expect(store.routingSkillState(named: name) == .notInstalled)
-
-        // Present + enabled.
-        store.skillListState = .loaded([
-            HermesInstalledSkill(id: "ar", name: "agent-routing", category: "local", source: "local", trust: "local", status: "enabled"),
-        ])
-        #expect(store.routingSkillState(named: name) == .installed(enabled: true))
-
-        // Present + disabled (name match is case-insensitive).
-        store.skillListState = .loaded([
-            HermesInstalledSkill(id: "ar", name: "Agent-Routing", category: "local", source: "local", trust: "local", status: "disabled"),
-        ])
-        #expect(store.routingSkillState(named: name) == .installed(enabled: false))
-
-        // A second managed skill is tracked independently.
-        store.skillListState = .loaded([
-            HermesInstalledSkill(id: "dr", name: "deck-routing", category: "local", source: "local", trust: "local", status: "enabled"),
-        ])
-        #expect(store.routingSkillState(named: ChatStore.deckRoutingSkillName) == .installed(enabled: true))
-        #expect(store.routingSkillState(named: ChatStore.agentRoutingSkillName) == .notInstalled)
-    }
-
-    @Test
     func hermesRequestsCarryRoutingPrimerListingOtherTargets() async throws {
         // A new gateway session is seeded with the AgentRouting primer: fence
         // format plus the live target list, excluding the session's own
