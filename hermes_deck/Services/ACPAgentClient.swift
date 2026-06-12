@@ -157,10 +157,7 @@ actor ACPAgentClient: HermesAgentClient {
 
     func respondToPermission(requestID: String, optionID: String) async {
         guard let pending = pendingPermissions.removeValue(forKey: requestID) else { return }
-        let outcome: TUIJSONValue = optionID.isEmpty
-            ? .object(["outcome": .string("cancelled")])
-            : .object(["outcome": .string("selected"), "optionId": .string(optionID)])
-        await connection.respond(id: pending.id, result: outcome)
+        await connection.respond(id: pending.id, result: ACPEventMapper.permissionResponseResult(optionID: optionID))
     }
 
     /// Spawns the adapter and runs `initialize` ahead of the first prompt so the
@@ -269,6 +266,13 @@ enum ACPEventMapper {
 
     static func permissionText(_ params: TUIJSONValue) -> String {
         params["toolCall"]?["title"]?.stringValue.map { "Allow \($0)?" } ?? "Permission requested."
+    }
+
+    static func permissionResponseResult(optionID: String) -> TUIJSONValue {
+        let outcome: TUIJSONValue = optionID.isEmpty
+            ? .object(["outcome": .string("cancelled")])
+            : .object(["outcome": .string("selected"), "optionId": .string(optionID)])
+        return .object(["outcome": outcome])
     }
 
     private static func toolEvent(_ update: [String: TUIJSONValue], state: ToolCallState) -> ToolCallEvent {

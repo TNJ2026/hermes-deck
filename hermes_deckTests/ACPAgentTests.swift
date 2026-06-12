@@ -71,6 +71,25 @@ struct ACPAgentTests {
     }
 
     @Test
+    func permissionResponseResultWrapsSelectedOutcomeForACP() throws {
+        #expect(ACPEventMapper.permissionResponseResult(optionID: "allow") == .object([
+            "outcome": .object([
+                "outcome": .string("selected"),
+                "optionId": .string("allow"),
+            ]),
+        ]))
+    }
+
+    @Test
+    func permissionResponseResultWrapsCancelledOutcomeForACP() throws {
+        #expect(ACPEventMapper.permissionResponseResult(optionID: "") == .object([
+            "outcome": .object([
+                "outcome": .string("cancelled"),
+            ]),
+        ]))
+    }
+
+    @Test
     func codexLaunchSpecUsesZedAdapter() {
         let spec = ACPAgent.codex.launchSpec(base: ["PATH": "/usr/bin"])
         #expect(spec.executableURL.path == "/usr/bin/env")
