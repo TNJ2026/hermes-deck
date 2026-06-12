@@ -37,6 +37,16 @@ struct ChatDetailView: View {
     /// Whether the user is parked at the bottom. Auto-scroll is suppressed while
     /// they've scrolled up to read history.
     @State private var isPinnedToBottom = true
+    /// A manual upward scroll pauses auto-follow outright — token-rate
+    /// auto-scrolls otherwise overpower the user's gesture. Released 2s after
+    /// the last scroll event; if a reply is still streaming, the view then
+    /// jumps back to the bottom and resumes following.
+    @State private var isHoldingForUserScroll = false
+    @State private var resumeFollowTask: Task<Void, Never>?
+    @State private var scrollWheelMonitor: Any?
+    /// The message list's frame in window coordinates, so the scroll-wheel
+    /// monitor only reacts to scrolls over this list (not other panels).
+    @State private var listGlobalFrame: CGRect = .zero
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,10 +105,24 @@ struct ChatDetailView: View {
                         // Lets the renderer show AgentRouting blocks as
                         // forwarding cards only when they would actually route.
                         .environment(\.routingMentionAliases, store.routingMentionAliases)
+                        .onGeometryChange(for: CGRect.self) { geo in
+                            geo.frame(in: .global)
+                        } action: { frame in
+                            listGlobalFrame = frame
+                        }
                         .onAppear {
                             scrollToBottom(with: proxy, animated: false)
+                            installScrollWheelMonitor(proxy: proxy)
+                        }
+                        .onDisappear {
+                            if let scrollWheelMonitor {
+                                NSEvent.removeMonitor(scrollWheelMonitor)
+                            }
+                            scrollWheelMonitor = nil
+                            resumeFollowTask?.cancel()
                         }
                         .onChange(of: thread.id) {
+                            endUserScrollHold()
                             isPinnedToBottom = true
                             scrollToBottom(with: proxy, animated: false)
                         }
@@ -106,14 +130,14 @@ struct ChatDetailView: View {
                         // but only if the user is following along at the bottom, so
                         // scrolling up to read history isn't yanked back down.
                         .onChange(of: thread.messages.count) {
-                            guard isPinnedToBottom else { return }
+                            guard isPinnedToBottom, !isHoldingForUserScroll else { return }
                             scrollToBottom(with: proxy, animated: true)
                         }
                         // Streaming growth follows the bottom instantly — animating
                         // each token stacks dozens of springs a second and makes the
                         // view jitter. Suppressed when the user has scrolled up.
                         .onChange(of: streamingTrigger(for: thread)) {
-                            guard isPinnedToBottom else { return }
+                            guard isPinnedToBottom, !isHoldingForUserScroll else { return }
                             scrollToBottom(with: proxy, animated: false)
                         }
                     }
@@ -380,6 +404,60 @@ struct ChatDetailView: View {
     private func recomputePinned() {
         guard viewportHeight > 0 else { return }
         isPinnedToBottom = bottomAnchorOffset <= viewportHeight + bottomFollowThreshold
+        // The user scrolled back to the bottom themselves — resume following
+        // immediately instead of waiting out the 2s hold.
+        if isPinnedToBottom, isHoldingForUserScroll {
+            endUserScrollHold()
+        }
+    }
+
+    /// Pauses auto-follow on a manual upward scroll over this list, restarting
+    /// the 2s release timer on every further scroll event. On release, jump
+    /// back to the bottom only if a reply is still streaming — a user reading
+    /// history in an idle thread stays put.
+    private func installScrollWheelMonitor(proxy: ScrollViewProxy) {
+        guard scrollWheelMonitor == nil else { return }
+        scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            MainActor.assumeIsolated {
+                handleScrollWheel(event, proxy: proxy)
+            }
+            return event
+        }
+    }
+
+    private func handleScrollWheel(_ event: NSEvent, proxy: ScrollViewProxy) {
+        guard event.scrollingDeltaY != 0 else { return }
+        // Only an upward scroll starts a hold; while holding, any direction
+        // keeps it alive (the user is still interacting).
+        guard event.scrollingDeltaY > 0 || isHoldingForUserScroll else { return }
+        guard let contentView = event.window?.contentView else { return }
+        let location = event.locationInWindow
+        let point = CGPoint(x: location.x, y: contentView.bounds.height - location.y)
+        guard listGlobalFrame.contains(point) else { return }
+
+        isHoldingForUserScroll = true
+        isPinnedToBottom = false
+        resumeFollowTask?.cancel()
+        resumeFollowTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            isHoldingForUserScroll = false
+            if isStreamingReply {
+                isPinnedToBottom = true
+                scrollToBottom(with: proxy, animated: true)
+            }
+        }
+    }
+
+    private func endUserScrollHold() {
+        resumeFollowTask?.cancel()
+        resumeFollowTask = nil
+        isHoldingForUserScroll = false
+    }
+
+    /// Whether this view's thread is currently streaming a reply.
+    private var isStreamingReply: Bool {
+        (sendState ?? store.sendState) == .sending
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy, animated: Bool) {
