@@ -16,28 +16,28 @@ struct MessageBubble: View {
                 }
                 if hasMessageCard {
                     VStack(alignment: .leading, spacing: 8) {
-                        if !message.content.isEmpty {
+                        if !trimmedContent.isEmpty {
                             if let routedSourceProfileName = message.routedSourceProfileName {
                                 RoutedUserPromptContent(
                                     sourceProfileName: routedSourceProfileName,
-                                    prompt: message.content
+                                    prompt: trimmedContent
                                 )
                             } else if message.role == .assistant,
                                       let replyName = message.agentReplyName {
                                 ExternalAgentReplyContent(attribution: ExternalAgentReplyAttribution(
                                     source: ExternalAgentReplySource.parse(displayName: replyName),
                                     displayName: replyName,
-                                    body: message.content
+                                    body: trimmedContent
                                 ))
                             } else if message.role == .assistant,
-                                      let attribution = ExternalAgentReplyAttribution.parse(message.content) {
+                                      let attribution = ExternalAgentReplyAttribution.parse(trimmedContent) {
                                 ExternalAgentReplyContent(attribution: attribution)
                             } else if shouldRenderMarkdown {
                                 // User prompts and completed assistant replies both
                                 // render as Markdown.
-                                MarkdownView(message.content)
+                                MarkdownView(trimmedContent)
                             } else {
-                                Text(message.content)
+                                Text(trimmedContent)
                                     .font(.body)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -66,7 +66,13 @@ struct MessageBubble: View {
     }
 
     private var hasMessageCard: Bool {
-        !message.content.isEmpty || !message.attachments.isEmpty
+        !trimmedContent.isEmpty || !message.attachments.isEmpty
+    }
+
+    /// Leading/trailing blank lines are display noise — trim them at render
+    /// time only, leaving the stored message (and what the agent sees) intact.
+    private var trimmedContent: String {
+        message.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var shouldRenderMarkdown: Bool {

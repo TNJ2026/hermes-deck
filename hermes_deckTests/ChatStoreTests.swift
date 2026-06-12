@@ -1074,7 +1074,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     func externalAgentReplySourceHeaderUsesAgentColors() throws {
         let source = try sourceFile("hermes_deck/Views/Chat/Message/MessageBubble.swift")
 
-        #expect(source.contains("ExternalAgentReplyAttribution.parse(message.content)"))
+        #expect(source.contains("ExternalAgentReplyAttribution.parse(trimmedContent)"))
         // Close-the-loop follow-ups are hidden from the list (the hand-off
         // status cards display the replies instead).
         let detailSource = try sourceFile("hermes_deck/Views/Chat/ChatDetailView.swift")
