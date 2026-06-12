@@ -187,19 +187,23 @@ extension ChatStore {
         }
 
         do {
+            let backend = threadBackends[threadID] ?? .hermes
             let request = HermesChatRequest(
                 conversationID: threadID,
                 profile: profile,
                 messages: thread(id: threadID)?.messages ?? [userMessage],
                 attachments: attachments,
-                backend: threadBackends[threadID] ?? .hermes,
+                backend: backend,
                 workingDirectory: agentWorkingDirectory(for: threadID),
                 promptEnvelope: AgentPromptEnvelope(
                     text: text,
                     attachments: attachments,
                     sourceProfileName: routedSourceProfileName
                 ),
-                resumeSessionID: thread(id: threadID)?.hermesSessionID
+                resumeSessionID: thread(id: threadID)?.hermesSessionID,
+                // Only Hermes profiles can route; external CLI backends are
+                // denied routing, so their sessions get no primer.
+                routingPrimer: backend == .hermes ? routingPrimer(for: profile) : nil
             )
             for try await event in agentClient.eventStream(for: request) {
                 try Task.checkCancellation()

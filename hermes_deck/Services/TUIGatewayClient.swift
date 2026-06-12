@@ -264,7 +264,7 @@ actor HermesTUIGatewayClient: HermesAgentClient {
             params = ["session_id": .string(resume), "cols": .number(100)]
         } else {
             method = "session.create"
-            params = ["cols": .number(100), "title": .string(title(for: request))]
+            params = createParams(for: request)
         }
 
         let sessionID: String
@@ -276,12 +276,30 @@ actor HermesTUIGatewayClient: HermesAgentClient {
             guard request.resumeSessionID != nil else { throw error }
             sessionID = try await createdSessionID(
                 method: "session.create",
-                params: ["cols": .number(100), "title": .string(title(for: request))]
+                params: createParams(for: request)
             )
         }
 
         sessionsByConversationID[request.conversationID] = sessionID
         return sessionID
+    }
+
+    /// `session.create` params. The routing primer is seeded as a system-role
+    /// history message (the gateway's seed-history path accepts "system"), so
+    /// the agent knows the ```AgentRouting delegation convention and the live
+    /// target list from its very first turn — persisted with the session, it
+    /// also survives resume without any client-side bookkeeping.
+    private func createParams(for request: HermesChatRequest) -> [String: TUIJSONValue] {
+        var params: [String: TUIJSONValue] = [
+            "cols": .number(100),
+            "title": .string(title(for: request)),
+        ]
+        if let primer = request.routingPrimer, !primer.isEmpty {
+            params["messages"] = .array([
+                .object(["role": .string("system"), "content": .string(primer)])
+            ])
+        }
+        return params
     }
 
     private func createdSessionID(method: String, params: [String: TUIJSONValue]) async throws -> String {

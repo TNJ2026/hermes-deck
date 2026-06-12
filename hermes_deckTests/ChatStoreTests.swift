@@ -756,6 +756,45 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func hermesRequestsCarryRoutingPrimerListingOtherTargets() async throws {
+        // A new gateway session is seeded with the AgentRouting primer: fence
+        // format plus the live target list, excluding the session's own
+        // profile. The chat thread itself stays clean.
+        let client = RecordingHermesAgentClient(reply: "ok")
+        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(agentClient: client, threads: [defaultThread])
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+        ]
+
+        await store.send("hi")
+
+        let request = try #require(await client.requests.last)
+        let primer = try #require(request.routingPrimer)
+        #expect(primer.contains("```AgentRouting"))
+        #expect(primer.contains("@coding"))
+        #expect(primer.contains("@researcher"))
+        #expect(primer.contains("@codex"))
+        #expect(!primer.contains("@default"))
+        #expect(store.selectedThread?.messages.allSatisfy { !$0.content.contains("[Hermes Deck routing]") } == true)
+    }
+
+    @Test
+    func externalBackendRequestsCarryNoRoutingPrimer() async throws {
+        // External CLIs cannot route, so their sessions get no primer.
+        let client = RecordingHermesAgentClient(reply: "ok")
+        let store = ChatStore(agentClient: client)
+        let threadID = store.agyThread()
+
+        await store.sendToAgy("hi", threadID: threadID)
+
+        let request = try #require(await client.requests.last)
+        #expect(request.routingPrimer == nil)
+    }
+
+    @Test
     func forwardedHermesPromptIncludesSourceInRequestEnvelopeButKeepsThreadMessageClean() async throws {
         let client = RecordingHermesAgentClient(reply: "agent ok")
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)

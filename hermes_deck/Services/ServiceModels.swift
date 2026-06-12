@@ -38,6 +38,10 @@ nonisolated struct HermesChatRequest: Sendable {
     /// When set, the Hermes gateway resumes this existing session id on the
     /// first prompt instead of creating a new one (used for history threads).
     var resumeSessionID: String?
+    /// Seeded as a system-role message when the gateway session is created, so
+    /// the agent knows it can delegate via ```AgentRouting blocks and which
+    /// targets exist. `nil` for backends that cannot route.
+    var routingPrimer: String?
 
     var promptText: String {
         promptEnvelope?.renderedText ?? messages.last?.content ?? ""
@@ -50,7 +54,8 @@ nonisolated struct HermesChatRequest: Sendable {
         attachments: [Attachment],
         backend: AgentBackend = .hermes,
         promptEnvelope: AgentPromptEnvelope? = nil,
-        resumeSessionID: String? = nil
+        resumeSessionID: String? = nil,
+        routingPrimer: String? = nil
     ) {
         self.init(
             conversationID: conversationID,
@@ -60,7 +65,8 @@ nonisolated struct HermesChatRequest: Sendable {
             backend: backend,
             workingDirectory: FileManager.default.homeDirectoryForCurrentUser,
             promptEnvelope: promptEnvelope,
-            resumeSessionID: resumeSessionID
+            resumeSessionID: resumeSessionID,
+            routingPrimer: routingPrimer
         )
     }
 
@@ -72,7 +78,8 @@ nonisolated struct HermesChatRequest: Sendable {
         backend: AgentBackend = .hermes,
         workingDirectory: URL,
         promptEnvelope: AgentPromptEnvelope? = nil,
-        resumeSessionID: String? = nil
+        resumeSessionID: String? = nil,
+        routingPrimer: String? = nil
     ) {
         self.conversationID = conversationID
         self.profile = profile
@@ -82,6 +89,7 @@ nonisolated struct HermesChatRequest: Sendable {
         self.workingDirectory = workingDirectory
         self.promptEnvelope = promptEnvelope
         self.resumeSessionID = resumeSessionID
+        self.routingPrimer = routingPrimer
     }
 }
 

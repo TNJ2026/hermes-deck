@@ -57,6 +57,18 @@ extension ChatStore {
         }
     }
 
+    /// The routing primer seeded into a new gateway session for `profile`:
+    /// every other mentionable Hermes profile plus the external CLIs, by their
+    /// primary alias. `nil` when there is nothing to route to.
+    func routingPrimer(for profile: HermesProfile) -> String? {
+        let selfID = profile.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let profileAliases = mentionableProfiles
+            .map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty && $0 != selfID }
+        let cliAliases = externalAgentMentionTargets.compactMap(\.aliases.first)
+        return AgentRoutingPrimer.text(targets: profileAliases + cliAliases)
+    }
+
     /// Whether `text` mentions a forwardable agent (external or Hermes profile).
     func hasMentionRoute(_ text: String, codeBlockOnly: Bool = false) -> Bool {
         !resolvedMentionRoutes(for: text, codeBlockOnly: codeBlockOnly).isEmpty
