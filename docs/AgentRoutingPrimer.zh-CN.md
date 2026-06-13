@@ -219,9 +219,85 @@ fan-out:目标线程并行执行(源线程标 busy,UI 出等待卡片)
 换句话说:**agent "知道"格式 = 格式说明持续存在于它的上下文中 + 模型的模板模仿能力**。这也解释了两个边界现象:
 
 - 旧会话(primer 上线前创建)的 agent 不知道格式——它的上下文里没有这段说明;
-- 模型偶尔可能输出不合格式的块(双目标、不以 @ 开头等)——这是文本约定的固有误差,两层兜底:① 解析器四道校验保证不产生错误路由,不合格的块原样显示为代码块;② **一次性自动纠错**——带 `AgentRouting` 标记但校验失败的块(意图明确、格式错了),Deck 自动回告具体原因与正确格式,agent 重发一次(`forwardAddressedReply` 的 `allowsCorrection` 限重试一次,防循环;纠错消息走隐藏的 routing follow-up 标志,不在 UI 显示)。仍失败则停止(参见第 8 节的工具化演进方向)。
+- 模型偶尔可能输出不合格式的块(双目标、不以 @ 开头等)——这是文本约定的固有误差,两层兜底:① 解析器四道校验保证不产生错误路由,不合格的块原样显示为代码块;② **一次性自动纠错**——带 `AgentRouting` 标记但校验失败的块(意图明确、格式错了),Deck 自动回告具体原因与正确格式,agent 重发一次(`forwardAddressedReply` 的 `allowsCorrection` 限重试一次,防循环;纠错消息走隐藏的 routing follow-up 标志,不在 UI 显示)。仍失败则停止(详见第 6 节;工具化演进见第 9 节)。
 
-## 6. 生命周期与边界
+## 6. 格式错误的自动纠错(one-shot self-correction)
+
+文本约定的固有误差由两层机制兜底。第一层是解析器的四道校验(保证**永不误路由**);第二层是本节的自动纠错(尽量把**漏路由**也救回来)。
+
+### 6.1 触发条件
+
+回复同时满足两点才触发:
+
+1. `codeBlockRouteSpans` 没有解析出任何**有效**路由(有有效块就直接路由,不纠错——部分成功时重发会产生重复路由,宁可保守);
+2. 回复中存在**带 `AgentRouting` 标记但校验失败**的块——fence 标记说明 agent 明确想路由,只是格式写错了。
+
+裸 ``` 块、其它语言块即使内容像路由也不触发(意图不明,不打扰;它们本来就被设计为"永不路由"的安全区)。
+
+### 6.2 诊断
+
+`AgentMentionRouteParser.malformedRoutingBlockReasons(in:aliasGroups:)` 对每个带标记的失败块给出一条人类可读原因,与四道校验一一对应:
+
+| 失败形态 | 回告原因 |
+|---|---|
+| 内容不以 `@` 开头(如 `please @coding fix it`) | the block's content must start with @<target> |
+| `@target` 不在别名表(拼错/不存在的 profile) | the @target is not one of the available targets |
+| `@target` 后没有 prompt | the block has no prompt after the @target |
+| 正文里出现第二个已知 `@target` | the block contains a second @target — one block addresses one target |
+
+别名表经 `mentionRouteGroups()` 与路由解析器**同源**——诊断永远和真实路由行为一致。
+
+### 6.3 纠错流程
+
+```
+agent 回复(含不合格的 AgentRouting 块)
+  │
+  ▼
+forwardAddressedReply
+  hasMentionRoute(codeBlockOnly) == false      ← 没有有效路由
+  allowsCorrection == true                     ← 首次,允许纠错
+  malformedRoutingBlockReasons(...) 非空       ← 确认是"想路由但写错"
+  │
+  ▼
+Deck 自动发送纠错消息(user 角色,isAgentReplyFollowUp = true):
+  [Hermes Deck] Your AgentRouting block was not routed: <具体原因>.
+  The format is:
+  ```AgentRouting
+  @<target> <prompt>
+  ```
+  Re-emit the corrected block(s) now, or reply normally to skip routing.
+  │
+  ▼
+agent 重发(一轮 API)
+  │
+  ▼
+forwardAddressedReply(retryReply, allowsCorrection: false)   ← 递归但禁纠错
+  ├─ 重发的块有效 → 正常路由(转发卡片、等待/replied 卡片照常)
+  └─ 仍不合格 → 停止。顽固模型最多消耗一轮纠错,不会循环
+```
+
+一次性限制就是 `allowsCorrection` 参数:入口默认 `true`,重试递归传 `false`——结构上保证最多一轮。
+
+### 6.4 用户看到什么
+
+- 纠错消息携带 `isAgentReplyFollowUp` 标志,与 close-the-loop 的 framed 回传共用同一隐藏机制:**进 agent 上下文,但不在聊天列表显示**;
+- 不合格的原块仍按代码块原样显示(转发卡片只为有效块渲染,显示与路由行为精确一致);
+- 纠错成功时,用户看到的效果近似"agent 自己改对了":不合格块之后紧跟修正版的转发卡片与等待卡片;
+- 纠错也失败时,界面安静地停在原块,无错误弹窗——格式错误的代价被限制在"这次没转发"。
+
+### 6.5 成本与权衡
+
+- 成本:触发时多一轮 API 调用(不触发零成本);
+- 为什么不自动修复而是回告重发:自动改写(猜目标、删第二个 mention)有误路由风险,违反"漏路由可重试、误路由不可逆"的原则;让模型自己改,语义由它负责;
+- 与确认按钮方案(UI 一键转发)互补:纠错处理"格式可说清"的错误,按钮适合"机器不该猜"的模糊场景(后者暂未实现)。
+
+### 6.6 对应测试
+
+- `malformedRoutingBlockReasonsDiagnoseEachFailure` —— 四类原因逐项命中;有效块与非路由块零误报
+- `malformedRoutingBlockTriggersOneCorrectionThenRoutes` —— 错→纠→对:恰一条纠错消息(带隐藏标志),重发的块成功送达目标
+- `malformedRoutingBlockCorrectionRunsOnlyOnce` —— 连续两次失败只纠错一次,且无任何路由发生
+
+## 7. 生命周期与边界
 
 | 场景 | 行为 |
 |---|---|
@@ -233,7 +309,7 @@ fan-out:目标线程并行执行(源线程标 busy,UI 出等待卡片)
 | UI 显示 | **完全不可见**——primer 只进 gateway 的会话历史,Deck 的 `ChatMessage` 列表里没有它(注:用 TUI 终端打开同一会话能看到这条 system 记录) |
 | token 成本 | 每会话一次,约 120-150 token |
 
-## 7. 测试覆盖
+## 8. 测试覆盖
 
 `hermes_deckTests/ChatStoreTests.swift`:
 
@@ -241,13 +317,13 @@ fan-out:目标线程并行执行(源线程标 busy,UI 出等待卡片)
 - `externalBackendRequestsCarryNoRoutingPrimer` —— agy 等外部 backend 的请求 `routingPrimer == nil`
 - 下游闭环另有独立测试(`codeBlockRouteSpansFollowOneBlockOneTargetRule`、`agentPanelProfileReplyForwardsAddressedMention`、`handoffStatusTracksWaitingThenRepliedForLoopClosingRoutes` 等)
 
-## 8. 已知局限与演进方向
+## 9. 已知局限与演进方向
 
 1. **历史压缩风险**:primer 在会话 history 中而非 cached system prompt;极长会话若触发 gateway 的历史压缩,理论上可能被裁掉。终极方案是 "真 C":`server.py` 接受 `client_context` 参数并传入 `build_system_prompt` 现成的 `system_message` 管道(约 10-20 行 hermes patch),Deck 侧只需换参数名
 2. **遵从度上限**:文本约定的遵从度低于结构化工具调用。若实际出现格式错误率问题,升级路径是把路由做成 `route_to_agent(target, prompt)` 真工具(仿 `approval.request`/`approval.respond` 的 server↔client 往返),届时 primer、code block 解析、framed 回传整套机制可一并退役
 3. **能力描述缺失**:目前目标列表只有别名,没有各 profile 的专长描述。可从 profile config 读取 description 字段附在列表上,提升 agent 的"转给谁"决策质量
 
-## 9. 相关文件索引
+## 10. 相关文件索引
 
 | 文件 | 职责 |
 |---|---|
