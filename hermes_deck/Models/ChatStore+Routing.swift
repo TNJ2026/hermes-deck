@@ -161,14 +161,32 @@ extension ChatStore {
         // A route whose target thread is the source thread itself (e.g.
         // `@default` typed in the main chat, or a profile mentioning itself)
         // would loop back into the same thread; treat it as plain text instead.
-        let routes = allRoutes.filter { threadIDForAgentProfile($0.target.profile) != sourceThreadID }
-        guard !routes.isEmpty else { return .notMention }
+        let selfFiltered = allRoutes.filter { threadIDForAgentProfile($0.target.profile) != sourceThreadID }
+        guard !selfFiltered.isEmpty else { return .notMention }
+
+        // Drop external targets whose launcher isn't installed (re-probed now,
+        // not the cached autocomplete state) — fanning out to them only fails
+        // after the fact with a "session busy"-style error. A skipped notice
+        // goes into the source thread instead.
+        await refreshExternalAgentAvailability()
+        var skippedNames: [String] = []
+        let routes = selfFiltered.filter { route in
+            guard route.isExternal, isExternalAgentUnavailable(route.target.profile.id) else { return true }
+            skippedNames.append(route.target.profile.displayName)
+            return false
+        }
 
         let sourceAttachments = takePendingAttachmentsForRoute(from: sourceThreadID)
         if appendUserMessage {
             append(ChatMessage(role: .user, content: text, attachments: sourceAttachments), to: sourceThreadID)
         }
         historyThreadIDs.insert(sourceThreadID)
+        for name in skippedNames {
+            append(ChatMessage(role: .system, content: "⚠️ \(name) is not installed — not routed."), to: sourceThreadID)
+        }
+        // Every target was unavailable: the notice is shown; do not fall through
+        // to sending the raw "@target …" text as an ordinary prompt.
+        guard !routes.isEmpty else { return .routed }
         let sourceName = source.displayName
 
         // The source thread is busy for the whole hand-off — fan-out, waiting
