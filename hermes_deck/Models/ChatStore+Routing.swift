@@ -27,10 +27,9 @@ extension ChatStore {
     /// first, then Hermes profiles) paired with the prompt segment that follows
     /// its mention. One composed message fans out to every @-mentioned agent,
     /// each receiving only the text after its own mention.
-    private func resolvedMentionRoutes(
-        for text: String,
-        codeBlockOnly: Bool = false
-    ) -> [(target: AgentRouteTarget, message: String, isExternal: Bool)] {
+    /// The router's alias table: external CLI groups first, then every
+    /// mentionable Hermes profile (id + display name).
+    private func mentionRouteGroups() -> [(aliases: [String], target: AgentRouteTarget, isExternal: Bool)] {
         var groups: [(aliases: [String], target: AgentRouteTarget, isExternal: Bool)] = []
         for target in externalAgentMentionTargets {
             groups.append((target.aliases, AgentRouteTarget(profile: target.profile, backend: target.backend), true))
@@ -41,7 +40,14 @@ extension ChatStore {
                 .filter { !$0.isEmpty }
             groups.append((aliases, AgentRouteTarget(profile: profile, backend: .hermes), false))
         }
+        return groups
+    }
 
+    private func resolvedMentionRoutes(
+        for text: String,
+        codeBlockOnly: Bool = false
+    ) -> [(target: AgentRouteTarget, message: String, isExternal: Bool)] {
+        let groups = mentionRouteGroups()
         let spans: [(groupIndex: Int, message: String)] = codeBlockOnly
             ? AgentMentionRouteParser.codeBlockRouteSpans(in: text, aliasGroups: groups.map(\.aliases))
                 .map { ($0.groupIndex, $0.message) }
@@ -250,17 +256,53 @@ extension ChatStore {
     /// not itself forward — so a forwarded agent's reply is never re-parsed and
     /// the chain stops after one hop. Keep forwarding out of the low-level `send`
     /// to preserve that invariant.
-    func forwardAddressedReply(_ reply: String?, from profile: HermesProfile, sourceThreadID: UUID) async {
-        guard let reply, hasMentionRoute(reply, codeBlockOnly: true) else { return }
-        _ = await routePromptIfAllowed(
-            reply,
-            from: .hermes(profile: profile),
-            sourceThreadID: sourceThreadID,
-            notifiesPanel: false,
-            appendUserMessage: false,
-            closesLoopToSource: true,
-            codeBlockOnly: true
+    func forwardAddressedReply(
+        _ reply: String?,
+        from profile: HermesProfile,
+        sourceThreadID: UUID,
+        allowsCorrection: Bool = true
+    ) async {
+        guard let reply else { return }
+        if hasMentionRoute(reply, codeBlockOnly: true) {
+            _ = await routePromptIfAllowed(
+                reply,
+                from: .hermes(profile: profile),
+                sourceThreadID: sourceThreadID,
+                notifiesPanel: false,
+                appendUserMessage: false,
+                closesLoopToSource: true,
+                codeBlockOnly: true
+            )
+            return
+        }
+
+        // Self-correction (one shot): the reply contains AgentRouting-tagged
+        // blocks that failed validation — the agent clearly meant to route but
+        // got the format wrong. Tell it why and let it re-emit; the retry runs
+        // with correction disabled so a stubborn model can't loop.
+        guard allowsCorrection else { return }
+        let reasons = AgentMentionRouteParser.malformedRoutingBlockReasons(
+            in: reply,
+            aliasGroups: mentionRouteGroups().map(\.aliases)
         )
+        guard !reasons.isEmpty else { return }
+        let correction = """
+        [Hermes Deck] Your AgentRouting block was not routed: \(reasons.joined(separator: "; ")). \
+        The format is:
+
+        ```\(AgentMentionRouteParser.routingFenceInfo)
+        @<target> <prompt>
+        ```
+
+        Re-emit the corrected block(s) now, or reply normally to skip routing.
+        """
+        let retryReply = await send(
+            correction,
+            in: sourceThreadID,
+            profile: profile,
+            isAgentReplyFollowUp: true
+        )
+        await forwardAddressedReply(retryReply, from: profile, sourceThreadID: sourceThreadID, allowsCorrection: false)
     }
 
     /// Sends a prompt in a Hermes-profile agent thread (the agent side panels),

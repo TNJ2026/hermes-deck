@@ -749,6 +749,82 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func malformedRoutingBlockReasonsDiagnoseEachFailure() {
+        let aliasGroups = [["coding"], ["research"]]
+        func reasons(_ text: String) -> [String] {
+            AgentMentionRouteParser.malformedRoutingBlockReasons(in: text, aliasGroups: aliasGroups)
+        }
+
+        #expect(reasons("```AgentRouting\nplease @coding fix it\n```").first?.contains("start with @<target>") == true)
+        #expect(reasons("```AgentRouting\n@nosuch fix it\n```").first?.contains("not one of the available targets") == true)
+        #expect(reasons("```AgentRouting\n@coding\n```").first?.contains("no prompt") == true)
+        #expect(reasons("```AgentRouting\n@coding fix, ping @research\n```").first?.contains("second @target") == true)
+        // Valid blocks and non-routing blocks produce no reasons.
+        #expect(reasons("```AgentRouting\n@coding fix it\n```").isEmpty)
+        #expect(reasons("```swift\n@State var x = 1\n```").isEmpty)
+    }
+
+    @Test
+    func malformedRoutingBlockTriggersOneCorrectionThenRoutes() async throws {
+        // Turn 1: malformed block → Deck sends a correction notice; turn 2 (the
+        // retry) emits a valid block, which routes.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: SequencedHermesAgentClient(replies: [
+                "```AgentRouting\nplease @coding fix it\n```",   // researcher, malformed
+                "```AgentRouting\n@coding fix it\n```",          // researcher retry, valid
+                "done",                                          // coding's reply
+                "thanks",                                        // researcher close-the-loop
+            ]),
+            threads: [mainThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        let msgs = try #require(store.thread(id: researcherThreadID)?.messages)
+        let corrections = msgs.filter { $0.role == .user && $0.content.contains("was not routed") }
+        #expect(corrections.count == 1)
+        #expect(corrections.first?.isAgentReplyFollowUp == true)
+        // The retry's valid block reached coding.
+        let coding = try #require(store.threads.first { $0.profile.id == "coding" })
+        #expect(coding.messages.filter { $0.role == .user }.map(\.content) == ["fix it"])
+    }
+
+    @Test
+    func malformedRoutingBlockCorrectionRunsOnlyOnce() async throws {
+        // A model that re-emits a malformed block gets no second correction.
+        let mainThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: SequencedHermesAgentClient(replies: [
+                "```AgentRouting\nplease @coding fix it\n```",
+                "```AgentRouting\nstill @coding broken\n```",
+            ]),
+            threads: [mainThread]
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+            HermesProfile(id: "coding", displayName: "Coding"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        let msgs = try #require(store.thread(id: researcherThreadID)?.messages)
+        let corrections = msgs.filter { $0.role == .user && $0.content.contains("was not routed") }
+        #expect(corrections.count == 1)
+        #expect(store.threads.first { $0.profile.id == "coding" } == nil)
+    }
+
+    @Test
     func handoffStatusTracksWaitingThenRepliedForLoopClosingRoutes() async throws {
         // Agent-initiated hand-off: a waiting card appears under the
         // triggering bubble, then flips to replied carrying the target's text.
@@ -2682,5 +2758,34 @@ final class GatedHermesAgentClient: HermesAgentClient {
     private func noteStartedAndWait() async {
         started += 1
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+/// Returns a different canned reply per turn, so multi-turn flows (like the
+/// malformed-block self-correction) can be scripted.
+@MainActor
+final class SequencedHermesAgentClient: HermesAgentClient {
+    private var replies: [String]
+
+    init(replies: [String]) {
+        self.replies = replies
+    }
+
+    private func nextReply() -> String {
+        replies.isEmpty ? "ok" : replies.removeFirst()
+    }
+
+    func send(_ request: HermesChatRequest) async throws -> HermesChatResponse {
+        HermesChatResponse(content: nextReply())
+    }
+
+    nonisolated func eventStream(for request: HermesChatRequest) -> AsyncThrowingStream<HermesAgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task { @MainActor in
+                let reply = nextReply()
+                continuation.yield(.messageComplete(sessionID: "s", text: reply, status: "complete", usage: nil))
+                continuation.finish()
+            }
+        }
     }
 }

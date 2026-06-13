@@ -68,10 +68,11 @@ struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     /// pill explicitly, so ordinary `Label:\n\nbody` content is never misread as
     /// an agent reply.
     var agentReplyName: String?
-    /// Set only for internally generated close-the-loop follow-ups such as
-    /// `X replied:\n\n...`, fed back to a source agent after it routed work to
-    /// another agent. This keeps ordinary user-authored prose from being styled
-    /// as a routing receipt just because it matches that text shape.
+    /// Set only for internally generated routing follow-ups fed back to a
+    /// source agent: the close-the-loop `X replied:` framing and the one-shot
+    /// malformed-block correction notice. Flagged messages reach the agent but
+    /// are hidden from the chat list (the hand-off status cards display the
+    /// replies), and ordinary user prose can never be mistaken for them.
     var isAgentReplyFollowUp: Bool?
     /// True for messages reconstructed from a stored session. The store has no
     /// real generation duration for these, so the timer is suppressed instead
@@ -563,6 +564,35 @@ extension AgentMentionRouteParser {
             let message = content[match.end...].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !message.isEmpty, !containsMention(message, candidates: candidates) else { return nil }
             return (match.group, alias, message)
+        }
+    }
+
+    /// Diagnoses ```AgentRouting blocks that would NOT route, returning one
+    /// human-readable reason per malformed block. Drives the one-shot
+    /// self-correction: the agent clearly *meant* to route (it used the fence
+    /// tag) but got the format wrong. Plain/other-language blocks are ignored.
+    static func malformedRoutingBlockReasons(
+        in text: String,
+        aliasGroups: [[String]]
+    ) -> [String] {
+        let candidates = mentionCandidates(for: aliasGroups)
+        return fencedCodeBlockContents(in: text).compactMap { block in
+            guard block.info.caseInsensitiveCompare(routingFenceInfo) == .orderedSame else { return nil }
+            let content = block.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard content.first == "@" else {
+                return "the block's content must start with @<target>"
+            }
+            guard let match = matchMention(in: content, at: content.startIndex, candidates: candidates) else {
+                return "the @target is not one of the available targets"
+            }
+            let message = content[match.end...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty else {
+                return "the block has no prompt after the @target"
+            }
+            guard !containsMention(message, candidates: candidates) else {
+                return "the block contains a second @target — one block addresses one target"
+            }
+            return nil
         }
     }
 
