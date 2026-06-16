@@ -128,13 +128,15 @@ struct ComposerView: View {
                                         .font(.system(size: 13, weight: .semibold))
                                 }
                             }
-                            .frame(width: 28, height: 28)
+                            .frame(width: 34, height: 34)
+                            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(sendButtonForeground)
-                        .background(sendButtonBackground, in: RoundedRectangle(cornerRadius: 8))
+                        .background(sendButtonBackground, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                         .shadow(color: sendButtonShadow, radius: 12, x: 0, y: 4)
                         .disabled(!canSend && !isSending)
+                        .pointingHandCursor(canSend || isSending)
                         .keyboardShortcut(.return, modifiers: .command)
                     }
                 }

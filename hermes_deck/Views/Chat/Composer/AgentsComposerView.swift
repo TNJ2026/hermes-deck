@@ -131,12 +131,14 @@ struct AgentsComposerView: View {
                                         .font(.system(size: 12, weight: .semibold))
                                 }
                             }
-                            .frame(width: 22, height: 22)
+                            .frame(width: 30, height: 30)
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(sendButtonForeground)
-                        .background(sendButtonBackground, in: RoundedRectangle(cornerRadius: 7))
+                        .background(sendButtonBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .disabled(!canSend && !isSending)
+                        .pointingHandCursor(canSend || isSending)
                         .keyboardShortcut(.return, modifiers: .command)
                     }
                 }

@@ -1200,11 +1200,23 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let detailSource = try sourceFile("hermes_deck/Views/Chat/ChatDetailView.swift")
         #expect(detailSource.contains("$0.isAgentReplyFollowUp != true"))
         #expect(detailSource.contains("AgentHandoffStatusView(items: batch.items)"))
-        #expect(source.contains("ExternalAgentReplyContent(attribution: attribution)"))
+        #expect(source.contains("ExternalAgentReplyContent(attribution: attribution, isComplete: message.completedAt != nil)"))
         #expect(source.contains("ExternalAgentAppearance.color(for: attribution.source)"))
         #expect(source.contains("Color(red: 217 / 255, green: 119 / 255, blue: 86 / 255)"))
         #expect(source.contains("Color(red: 130 / 255, green: 163 / 255, blue: 255 / 255)"))
         #expect(source.contains("Color(red: 150 / 255, green: 100 / 255, blue: 160 / 255)"))
+    }
+
+    @Test
+    func streamingAssistantMarkdownRenderingIsDebounced() throws {
+        let source = try sourceFile("hermes_deck/Views/Chat/Message/MessageBubble.swift")
+
+        #expect(source.contains("StreamingMarkdownContent(source: trimmedContent, isComplete: message.completedAt != nil)"))
+        #expect(source.contains("StreamingMarkdownContent(source: attribution.body, isComplete: isComplete)"))
+        #expect(source.contains("try? await Task.sleep(nanoseconds: 2_000_000_000)"))
+        #expect(source.contains("guard !isComplete, !source.isEmpty else { return }"))
+        #expect(source.contains("if isComplete {\n                MarkdownView(source)"))
+        #expect(source.contains("} else if renderedSource == source {\n                MarkdownView(renderedSource)"))
     }
 
     @Test

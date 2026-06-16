@@ -32,19 +32,14 @@ struct MessageBubble: View, Equatable {
                                     source: ExternalAgentReplySource.parse(displayName: replyName),
                                     displayName: replyName,
                                     body: trimmedContent
-                                ))
+                                ), isComplete: message.completedAt != nil)
                             } else if message.role == .assistant,
                                       let attribution = ExternalAgentReplyAttribution.parse(trimmedContent) {
-                                ExternalAgentReplyContent(attribution: attribution)
-                            } else if shouldRenderMarkdown {
-                                // User prompts and completed assistant replies both
-                                // render as Markdown.
-                                MarkdownView(trimmedContent)
+                                ExternalAgentReplyContent(attribution: attribution, isComplete: message.completedAt != nil)
+                            } else if message.role == .assistant {
+                                StreamingMarkdownContent(source: trimmedContent, isComplete: message.completedAt != nil)
                             } else {
-                                Text(trimmedContent)
-                                    .font(.body)
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                MarkdownView(trimmedContent)
                             }
                         }
                         if !message.attachments.isEmpty {
@@ -79,13 +74,11 @@ struct MessageBubble: View, Equatable {
         message.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var shouldRenderMarkdown: Bool {
-        message.role != .assistant || message.completedAt != nil
-    }
 }
 
 struct ExternalAgentReplyContent: View {
     let attribution: ExternalAgentReplyAttribution
+    var isComplete = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -97,13 +90,41 @@ struct ExternalAgentReplyContent: View {
                 .background(sourceColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
                 .textSelection(.enabled)
 
-            MarkdownView(attribution.body)
+            StreamingMarkdownContent(source: attribution.body, isComplete: isComplete)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sourceColor: Color {
         ExternalAgentAppearance.color(for: attribution.source)
+    }
+}
+
+struct StreamingMarkdownContent: View {
+    let source: String
+    let isComplete: Bool
+
+    @State private var renderedSource = ""
+
+    var body: some View {
+        Group {
+            if isComplete {
+                MarkdownView(source)
+            } else if renderedSource == source {
+                MarkdownView(renderedSource)
+            } else {
+                Text(source)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task(id: source) {
+            guard !isComplete, !source.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            renderedSource = source
+        }
     }
 }
 

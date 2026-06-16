@@ -34,6 +34,19 @@ extension View {
     }
 }
 
+extension View {
+    func pointingHandCursor(_ isEnabled: Bool = true) -> some View {
+        self.onHover { isInside in
+            guard isEnabled else { return }
+            if isInside {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}
+
 struct ComposerAttachmentChip: View {
     let attachment: Attachment
     let onRemove: () -> Void
@@ -85,6 +98,8 @@ struct ComposerAttachmentChip: View {
 }
 
 struct ComposerIconButton: View {
+    @Environment(\.isEnabled) private var isEnabled
+
     let systemImage: String
     let accessibilityLabel: String
     var tint: Color = .secondary
@@ -100,5 +115,6 @@ struct ComposerIconButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
+        .pointingHandCursor(isEnabled)
     }
 }
