@@ -1217,6 +1217,9 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(source.contains("guard !isComplete, !source.isEmpty else { return }"))
         #expect(source.contains("if isComplete {\n                MarkdownView(source)"))
         #expect(source.contains("} else if renderedSource == source {\n                MarkdownView(renderedSource)"))
+        #expect(source.contains("} else if !renderedSource.isEmpty {"))
+        #expect(source.contains("Text(streamingTail)"))
+        #expect(source.contains("source.hasPrefix(renderedSource)"))
     }
 
     @Test

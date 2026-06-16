@@ -112,6 +112,16 @@ struct StreamingMarkdownContent: View {
                 MarkdownView(source)
             } else if renderedSource == source {
                 MarkdownView(renderedSource)
+            } else if !renderedSource.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    MarkdownView(renderedSource)
+                    if !streamingTail.isEmpty {
+                        Text(streamingTail)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else {
                 Text(source)
                     .font(.body)
@@ -125,6 +135,11 @@ struct StreamingMarkdownContent: View {
             guard !Task.isCancelled else { return }
             renderedSource = source
         }
+    }
+
+    private var streamingTail: String {
+        guard source.hasPrefix(renderedSource) else { return source }
+        return String(source.dropFirst(renderedSource.count))
     }
 }
 
