@@ -40,6 +40,12 @@ enum AgentRoutingPrimer {
         prompt.
         - Use one block per target. Several blocks fan out in parallel.
         - Do not put a second target alias inside the same block.
+        - Treat the block as an action request, not as a Markdown example to \
+        display.
+        - The AgentRouting block is the complete output for that subtask; do \
+        not wrap it inside another code block or quote block.
+        - Do not place a plain ``` fence before or after the AgentRouting \
+        fence.
         - Mentions in prose or in non-AgentRouting code blocks do not route.
         - Target replies come back to you in a follow-up turn. Delegation is \
         single-hop, so routed agents cannot delegate again.
@@ -52,8 +58,9 @@ enum AgentRoutingPrimer {
 
         Invalid:
         - `Please ask @\(targets[0]) ...` in prose
-        - A block that starts with anything before the @target
-        - One block containing more than one available @target
+        - A block that starts with anything before the target alias
+        - One block containing more than one available target alias
+        - A nested code block that contains an AgentRouting block inside it
 
         If no target is clearly useful, answer normally without a routing block.
         """
