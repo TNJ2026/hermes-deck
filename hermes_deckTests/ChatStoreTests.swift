@@ -692,6 +692,12 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(spans.first?.message == "fix the crash\nin the parser")
         #expect(spans.last?.message == "verify the fix")
 
+        let newlineFormat = "```AgentRouting\n@coding\nfix the crash\nin the parser\n```"
+        #expect(
+            AgentMentionRouteParser.codeBlockRouteSpans(in: newlineFormat, aliasGroups: aliasGroups).first?.message
+            == "fix the crash\nin the parser"
+        )
+
         // A block holding a second known mention is ambiguous — rejected.
         let twoTargets = "```AgentRouting\n@coding fix it, then ping @research\n```"
         #expect(AgentMentionRouteParser.codeBlockRouteSpans(in: twoTargets, aliasGroups: aliasGroups).isEmpty)
@@ -741,6 +747,11 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let request = try #require(await client.requests.last)
         let primer = try #require(request.routingPrimer)
         #expect(primer.contains("```AgentRouting"))
+        #expect(primer.contains("@coding\nInspect the parser failure"))
+        #expect(primer.contains("the prompt may span multiple lines"))
+        #expect(primer.contains("Use one block per target"))
+        #expect(primer.contains("Do not put a second @target inside the same block"))
+        #expect(primer.contains("answer normally without a routing block"))
         #expect(primer.contains("@coding"))
         #expect(primer.contains("@researcher"))
         #expect(primer.contains("@codex"))
@@ -1187,6 +1198,16 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(source.contains("Color(red: 217 / 255, green: 119 / 255, blue: 86 / 255)"))
         #expect(source.contains("Color(red: 130 / 255, green: 163 / 255, blue: 255 / 255)"))
         #expect(source.contains("Color(red: 150 / 255, green: 100 / 255, blue: 160 / 255)"))
+    }
+
+    @Test
+    func chatDetailScrollsWhenUserPromptIsAppended() throws {
+        let source = try sourceFile("hermes_deck/Views/Chat/ChatDetailView.swift")
+
+        #expect(source.contains("visibleMessages(in: thread).count"))
+        #expect(source.contains("didAppendUserPrompt"))
+        #expect(source.contains("visibleMessages(in: thread).last?.role == .user"))
+        #expect(source.contains("endUserScrollHold()"))
     }
 
     @Test

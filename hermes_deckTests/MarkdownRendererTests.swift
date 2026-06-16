@@ -125,6 +125,21 @@ struct MarkdownRendererTests {
     }
 
     @Test
+    func allCodeBlocksRenderCopyControl() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("hermes_deck/Markdown/MarkdownRenderer.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("private var languageLabel: String"))
+        #expect(source.contains("language?.uppercased() ?? \"CODE\""))
+        #expect(source.contains(".help(\"Copy code\")"))
+    }
+
+    @Test
     func codeBlockSyntaxHighlighterTokenizesSupportedLanguages() {
         let swiftTokens = CodeBlockSyntaxHighlighter.tokens(for: #"let value = "hello" // comment"#, language: "swift")
         let pythonTokens = CodeBlockSyntaxHighlighter.tokens(for: #"def run(): # comment"#, language: "python")

@@ -658,35 +658,33 @@ private struct MarkdownCodeBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let language {
-                HStack(spacing: 8) {
-                    Text(language.uppercased())
-                        .font(.caption2)
-                        .foregroundStyle(languageColor)
+            HStack(spacing: 8) {
+                Text(languageLabel)
+                    .font(.caption2)
+                    .foregroundStyle(languageColor)
 
-                    Spacer(minLength: 12)
+                Spacer(minLength: 12)
 
-                    Button {
-                        CodeBlockClipboard.copy(code)
-                        showCopiedFeedback()
-                    } label: {
-                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 16, height: 16)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(didCopy ? Color.green : Color.secondary)
-                    .help("Copy code")
+                Button {
+                    CodeBlockClipboard.copy(code)
+                    showCopiedFeedback()
+                } label: {
+                    Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 16, height: 16)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Rectangle().fill(headerBackground))
-
-                Rectangle()
-                    .fill(.quaternary)
-                    .frame(height: 1)
+                .buttonStyle(.plain)
+                .foregroundStyle(didCopy ? Color.green : Color.secondary)
+                .help("Copy code")
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Rectangle().fill(headerBackground))
+
+            Rectangle()
+                .fill(.quaternary)
+                .frame(height: 1)
 
             ScrollView(.horizontal) {
                 Text(highlightedCode)
@@ -699,6 +697,10 @@ private struct MarkdownCodeBlockView: View {
         .background(Color.gray.opacity(0.12), in: shape)
         .clipShape(shape)
         .onDisappear { resetTask?.cancel() }
+    }
+
+    private var languageLabel: String {
+        language?.uppercased() ?? "CODE"
     }
 
     /// ```AgentRouting blocks lead with `@target` — tint mentions blue there so

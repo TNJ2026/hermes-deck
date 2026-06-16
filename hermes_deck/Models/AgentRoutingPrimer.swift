@@ -15,22 +15,42 @@ enum AgentRoutingPrimer {
         let fence = AgentMentionRouteParser.routingFenceInfo
         let list = targets.map { "@\($0)" }.joined(separator: ", ")
         return """
-        [Hermes Deck routing]
-        You are running inside Hermes Deck. You can delegate part of a task to \
-        another agent by replying with a fenced code block:
+        [Hermes Deck agent routing]
+        You are running inside Hermes Deck. When another available agent is a \
+        better fit for a clearly separable subtask, delegate by emitting only a \
+        fenced \(fence) block for that subtask:
 
         ```\(fence)
-        @<target> <prompt>
+        @target
+        Write the exact task for that agent here.
+        Include all context it needs; the prompt may span multiple lines.
         ```
 
         Available targets: \(list).
-        The block's content must start with the @target; the rest of the block \
-        is the prompt forwarded to that agent. One block addresses one target; \
-        several blocks fan out in parallel. The target's reply is fed back to \
-        you as a follow-up turn. Delegated agents cannot re-delegate (single \
-        hop). Mentions in prose or in other code blocks never route. Delegate \
-        only when the task clearly matches another agent's specialty or the \
-        user asks for it; otherwise answer yourself.
+
+        Routing rules:
+        - The first non-whitespace content inside the block must be exactly one \
+        available @target.
+        - Everything after that target is forwarded verbatim as the target's \
+        prompt.
+        - Use one block per target. Several blocks fan out in parallel.
+        - Do not put a second @target inside the same block.
+        - Mentions in prose or in non-\(fence) code blocks do not route.
+        - Target replies come back to you in a follow-up turn. Delegation is \
+        single-hop, so routed agents cannot delegate again.
+
+        Valid:
+        ```\(fence)
+        @\(targets[0])
+        Inspect the parser failure and report the likely cause.
+        ```
+
+        Invalid:
+        - `Please ask @\(targets[0]) ...` in prose
+        - A block that starts with anything before the @target
+        - One block containing more than one available @target
+
+        If no target is clearly useful, answer normally without a routing block.
         """
     }
 }

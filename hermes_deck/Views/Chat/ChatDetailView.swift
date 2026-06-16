@@ -60,7 +60,7 @@ struct ChatDetailView: View {
                                 // Close-the-loop follow-ups reach the agent but
                                 // are not displayed — the hand-off status cards
                                 // below the triggering bubble show the replies.
-                                ForEach(thread.messages.filter { $0.isAgentReplyFollowUp != true }) { message in
+                                ForEach(visibleMessages(in: thread)) { message in
                                     MessageBubble(message: message, assistantTrailingInset: assistantTrailingInset)
                                         .equatable()
                                         .id(message.id)
@@ -130,8 +130,14 @@ struct ChatDetailView: View {
                         // A new message (or a turn boundary) animates into view —
                         // but only if the user is following along at the bottom, so
                         // scrolling up to read history isn't yanked back down.
-                        .onChange(of: thread.messages.count) {
-                            guard isPinnedToBottom, !isHoldingForUserScroll else { return }
+                        .onChange(of: visibleMessages(in: thread).count) {
+                            let shouldFollow = isPinnedToBottom && !isHoldingForUserScroll
+                            let didAppendUserPrompt = visibleMessages(in: thread).last?.role == .user
+                            guard shouldFollow || didAppendUserPrompt else { return }
+                            if didAppendUserPrompt {
+                                endUserScrollHold()
+                                isPinnedToBottom = true
+                            }
                             scrollToBottom(with: proxy, animated: true)
                         }
                         // Streaming growth follows the bottom instantly — animating
@@ -267,6 +273,10 @@ struct ChatDetailView: View {
             return store.thread(id: threadID)
         }
         return store.selectedThread
+    }
+
+    private func visibleMessages(in thread: ChatThread) -> [ChatMessage] {
+        thread.messages.filter { $0.isAgentReplyFollowUp != true }
     }
 
     private var isSending: Bool {

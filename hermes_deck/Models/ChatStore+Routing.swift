@@ -329,14 +329,14 @@ extension ChatStore {
         )
         guard !reasons.isEmpty else { return }
         let correction = """
-        [Hermes Deck] Your AgentRouting block was not routed: \(reasons.joined(separator: "; ")). \
-        The format is:
+        [Hermes Deck] Your AgentRouting block was not routed: \(reasons.joined(separator: "; ")).
+        Re-emit only corrected \(AgentMentionRouteParser.routingFenceInfo) block(s), or answer normally to skip routing.
 
         ```\(AgentMentionRouteParser.routingFenceInfo)
-        @<target> <prompt>
+        @target
+        Write the exact task for that agent here.
+        Include all context it needs; the prompt may span multiple lines.
         ```
-
-        Re-emit the corrected block(s) now, or reply normally to skip routing.
         """
         let retryReply = await send(
             correction,
