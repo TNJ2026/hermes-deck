@@ -63,7 +63,12 @@ struct TUIGatewayEventParser: Sendable {
                 options: params.payload?.approvalOptions ?? EventPayload.defaultApprovalOptions
             )
         case "clarify.request":
-            return .clarifyRequest(sessionID: params.sessionID ?? "", question: params.payload?.question ?? "", choices: params.payload?.choices ?? [])
+            return .clarifyRequest(
+                sessionID: params.sessionID ?? "",
+                requestID: params.payload?.requestID,
+                question: params.payload?.question ?? "",
+                choices: params.payload?.choices ?? []
+            )
         case "subagent.spawn_requested":
             return .subagentSpawnRequested(sessionID: params.sessionID ?? "", progress: params.payload?.subagentProgressEvent() ?? .fallback)
         case "subagent.start":
@@ -133,6 +138,7 @@ actor HermesTUIGatewayClient: HermesAgentClient {
                 do {
                     let sessionID = try await sessionID(for: request)
                     activeSession.set(sessionID)
+                    continuation.yield(.sessionInfo(sessionID: sessionID, info: HermesSessionInfo()))
                     for attachment in request.attachments where attachment.contentType.hasPrefix("image/") {
                         _ = try await rpc.call(
                             method: "image.attach",
@@ -249,6 +255,18 @@ actor HermesTUIGatewayClient: HermesAgentClient {
         )
     }
 
+    func respondToClarification(requestID: String, answer: String) async {
+        let requestID = requestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestID.isEmpty else { return }
+        _ = try? await rpc.call(
+            method: "clarify.respond",
+            params: [
+                "request_id": .string(requestID),
+                "answer": .string(answer),
+            ]
+        )
+    }
+
     private func sessionID(for request: HermesChatRequest) async throws -> String {
         if let existing = sessionsByConversationID[request.conversationID] {
             return existing
@@ -339,6 +357,7 @@ actor HermesTUIGatewayClient: HermesAgentClient {
         // agent its replies are rendered live in the Deck UI, where the
         // `deck-routing` @target-code-block convention works.
         environment["HERMES_DECK"] = "1"
+        environment.merge(DeckRoutingIPCServer.shared.environmentVariablesBlocking(waitingUpTo: 2)) { _, new in new }
         let executableBin = executableURL.deletingLastPathComponent()
         let venvURL = executableBin.deletingLastPathComponent()
         environment["VIRTUAL_ENV"] = normalizedPath(venvURL)
@@ -402,6 +421,15 @@ actor HermesProfileGatewayClient: HermesAgentClient {
         }
     }
 
+    func respondToClarification(requestID: String, answer: String) async {
+        let requestID = requestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestID.isEmpty else { return }
+        let clients = clientsByProfileID.values
+        for client in clients {
+            await client.respondToClarification(requestID: requestID, answer: answer)
+        }
+    }
+
     /// Terminates every profile's tui_gateway subprocess. Called on app quit.
     func shutdown() async {
         for client in clientsByProfileID.values {
@@ -460,7 +488,7 @@ private extension HermesAgentEvent {
              .subagentProgress(let id, _),
              .subagentComplete(let id, _),
              .approvalRequest(let id, _, _, _),
-             .clarifyRequest(let id, _, _):
+             .clarifyRequest(let id, _, _, _):
             id == sessionID
         case .error(let id, _):
             id == nil || id == sessionID
@@ -704,6 +732,7 @@ private struct EventPayload: Decodable {
     var command: String?
     var description: String?
     var choices: [String]?
+    var requestID: String?
     var goal: String?
     var subagentID: String?
     var parentID: String?
@@ -766,6 +795,7 @@ private struct EventPayload: Decodable {
         command = try container.decodeString(for: ["command"])
         description = try container.decodeString(for: ["description"])
         choices = try container.decodeIfPresent([String].self, forKey: EventPayloadCodingKey(stringValue: "choices"))
+        requestID = try container.decodeString(for: ["request_id", "requestID"])
         goal = try container.decodeString(for: ["goal"])
         subagentID = try container.decodeString(for: ["subagent_id", "subagentID"])
         parentID = try container.decodeString(for: ["parent_id", "parentID"])

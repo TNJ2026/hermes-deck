@@ -106,12 +106,12 @@ struct TUIGatewayTests {
     @Test
     func parsesClarifyRequestEvent() throws {
         let line = """
-        {"jsonrpc":"2.0","method":"event","params":{"type":"clarify.request","session_id":"abc123","payload":{"question":"Pick one","choices":["A","B"]}}}
+        {"jsonrpc":"2.0","method":"event","params":{"type":"clarify.request","session_id":"abc123","payload":{"request_id":"req-1","question":"Pick one","choices":["A","B"]}}}
         """
 
         let event = try TUIGatewayEventParser.parseEvent(line)
 
-        #expect(event == .clarifyRequest(sessionID: "abc123", question: "Pick one", choices: ["A", "B"]))
+        #expect(event == .clarifyRequest(sessionID: "abc123", requestID: "req-1", question: "Pick one", choices: ["A", "B"]))
     }
 
     @Test
@@ -236,6 +236,25 @@ struct TUIGatewayTests {
         let path = try #require(environment["PATH"])
         #expect(path.split(separator: ":").first == "/Users/test/.hermes/hermes-agent/venv/bin")
         #expect(environment["VIRTUAL_ENV"] == "/Users/test/.hermes/hermes-agent/venv")
+    }
+
+    @Test
+    func gatewayEnvironmentIncludesDeckRoutingIPCVariables() async throws {
+        try DeckRoutingIPCServer.shared.start { _ in
+            DeckRoutingIPCResponse(ok: true, status: "queued", error: nil)
+        }
+        _ = await DeckRoutingIPCServer.shared.environmentVariables(waitingUpTo: 2)
+
+        let environment = HermesTUIGatewayClient.environment(
+            for: .defaultProfile,
+            executableURL: URL(fileURLWithPath: "/Users/test/.hermes/hermes-agent/venv/bin/python"),
+            base: [:]
+        )
+
+        #expect(environment["HERMES_DECK"] == "1")
+        #expect(environment["HERMES_DECK_ROUTE_HOST"] == "127.0.0.1")
+        #expect(environment["HERMES_DECK_ROUTE_PORT"]?.isEmpty == false)
+        #expect(environment["HERMES_DECK_ROUTE_TOKEN"]?.isEmpty == false)
     }
 
     @Test

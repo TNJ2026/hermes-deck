@@ -134,11 +134,13 @@ struct ClarificationRequest: Identifiable, Hashable, Codable, Sendable {
     let id: UUID
     var question: String
     var choices: [String]
+    var requestID: String?
 
-    init(id: UUID = UUID(), question: String, choices: [String] = []) {
+    init(id: UUID = UUID(), question: String, choices: [String] = [], requestID: String? = nil) {
         self.id = id
         self.question = question
         self.choices = choices
+        self.requestID = requestID
     }
 }
 

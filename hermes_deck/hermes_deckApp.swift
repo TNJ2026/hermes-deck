@@ -55,6 +55,9 @@ private struct ChatWindowRoot: View {
 
     var body: some View {
         ContentView(store: store)
+            .task {
+                store.startDeckRoutingIPC()
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 // Kill spawned agent subprocesses (ACP adapter subtrees and the
                 // per-profile tui_gateways). Bounded wait: this notification is
@@ -70,4 +73,3 @@ private struct ChatWindowRoot: View {
             }
     }
 }
-

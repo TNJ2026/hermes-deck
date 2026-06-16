@@ -151,11 +151,22 @@ struct ToolsView: View {
                     }
                 }
             case .loaded(let tools):
-                if tools.isEmpty {
-                    ContentUnavailableView("No Tools", systemImage: "wrench.and.screwdriver")
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        DeckDelegationToolInstallRow(
+                            status: store.deckDelegationToolStatus,
+                            installState: store.deckDelegationToolInstallState,
+                            onInstall: {
+                                Task {
+                                    await store.installDeckDelegationTool()
+                                }
+                            }
+                        )
+
+                        if tools.isEmpty {
+                            ContentUnavailableView("No Tools", systemImage: "wrench.and.screwdriver")
+                                .frame(maxWidth: .infinity)
+                        } else {
                             ForEach(tools) { tool in
                                 InstalledToolRow(
                                     tool: tool,
@@ -167,8 +178,8 @@ struct ToolsView: View {
                                 )
                             }
                         }
-                        .padding(24)
                     }
+                    .padding(24)
                 }
             }
         }
@@ -181,6 +192,119 @@ struct ToolsView: View {
         .onChange(of: store.selectedProfile.id) { _, _ in
             Task { await store.loadInstalledTools() }
         }
+    }
+}
+
+struct DeckDelegationToolInstallRow: View {
+    var status: DeckDelegationToolStatus
+    var installState: DeckDelegationToolInstallState
+    var onInstall: @MainActor () -> Void
+
+    private var isInstalling: Bool {
+        installState == .installing
+    }
+
+    private var didConfirmInstall: Bool {
+        installState == .installed
+    }
+
+    private var isInstalled: Bool {
+        switch status {
+        case .missing:
+            return false
+        case .current, .outdated:
+            return true
+        }
+    }
+
+    private var needsUpdate: Bool {
+        if case .outdated = status { return true }
+        return false
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("deck_delegate_agent")
+                        .font(.title3.weight(.semibold))
+                    PluginInfoCapsule(text: "Hermes Deck", systemImage: "app.connected.to.app.below.fill")
+                }
+
+                Text(statusText)
+                    .font(.subheadline)
+                    .foregroundStyle(statusColor)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                onInstall()
+            } label: {
+                HStack(spacing: 6) {
+                    if isInstalling {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: didConfirmInstall || isCurrent ? "checkmark.circle.fill" : (isInstalled ? "arrow.clockwise" : "square.and.arrow.down"))
+                    }
+                    Text(buttonText)
+                }
+                .frame(minWidth: 96)
+            }
+            .disabled(isInstalling || (isCurrent && !needsUpdate))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.quaternary)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var buttonText: String {
+        if isInstalling { return "Installing" }
+        if didConfirmInstall { return "Installed" }
+        if isCurrent { return "Installed" }
+        if isInstalled { return "Update" }
+        return "Install"
+    }
+
+    private var statusText: String {
+        if didConfirmInstall { return "Installed. Restart the gateway to load the latest tool." }
+        switch status {
+        case .missing:
+            break
+        case .current(let version):
+            return "Installed for the selected profile (v\(version)). Restart the gateway after updating."
+        case .outdated(let installedVersion, let bundledVersion):
+            let installed = installedVersion ?? "unknown"
+            return "Update available: installed v\(installed), bundled v\(bundledVersion). Restart the gateway after updating."
+        }
+        switch installState {
+        case .idle:
+            return "Install the Deck delegation tool for the selected profile."
+        case .installing:
+            return isInstalled ? "Updating for the selected profile..." : "Installing for the selected profile..."
+        case .installed:
+            return "Installed. Restart the gateway to load the latest tool."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    private var statusColor: Color {
+        if didConfirmInstall { return .secondary }
+        if needsUpdate { return .orange }
+        if isInstalled { return .secondary }
+        if case .failed = installState { return .red }
+        return .secondary
+    }
+
+    private var isCurrent: Bool {
+        if case .current = status { return true }
+        return false
     }
 }
 
@@ -417,4 +541,3 @@ struct InstalledSkillRow: View {
         }
     }
 }
-

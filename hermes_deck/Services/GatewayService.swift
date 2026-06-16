@@ -3,6 +3,7 @@ import Foundation
 protocol HermesGatewayProvider: Sendable {
     func isRunning(profile: HermesProfile) async -> Bool
     func start(profile: HermesProfile) async throws
+    func restart(profile: HermesProfile) async throws
 }
 
 actor LocalHermesGatewayProvider: HermesGatewayProvider {
@@ -29,7 +30,7 @@ actor LocalHermesGatewayProvider: HermesGatewayProvider {
     func isRunning(profile: HermesProfile) async -> Bool {
         let pythonURL = pythonURL
         let hermesAgentURL = hermesAgentURL
-        let environment = environment(for: profile)
+        let environment = await environment(for: profile, includeRouting: false)
 
         return await Task.detached(priority: .utility) {
             let process = Process()
@@ -58,7 +59,7 @@ actor LocalHermesGatewayProvider: HermesGatewayProvider {
     func start(profile: HermesProfile) async throws {
         let hermesURL = hermesURL
         let rootURL = rootURL
-        let environment = environment(for: profile)
+        let environment = await environment(for: profile)
 
         try await Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -74,7 +75,40 @@ actor LocalHermesGatewayProvider: HermesGatewayProvider {
         }.value
     }
 
-    private func environment(for profile: HermesProfile) -> [String: String] {
+    func restart(profile: HermesProfile) async throws {
+        try await stop(profile: profile)
+        try await start(profile: profile)
+    }
+
+    private func stop(profile: HermesProfile) async throws {
+        let pythonURL = pythonURL
+        let hermesAgentURL = hermesAgentURL
+        let environment = await environment(for: profile, includeRouting: false)
+
+        try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = pythonURL
+            process.currentDirectoryURL = hermesAgentURL
+            process.environment = environment
+            process.arguments = [
+                "-c",
+                "from hermes_cli.gateway import stop_profile_gateway; stop_profile_gateway()",
+            ]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try process.runTranslatingMissingCommand(named: "Hermes")
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                throw NSError(
+                    domain: "HermesGateway",
+                    code: Int(process.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "Hermes gateway stop failed"]
+                )
+            }
+        }.value
+    }
+
+    private func environment(for profile: HermesProfile, includeRouting: Bool = true) async -> [String: String] {
         var environment = baseEnvironment
         let id = profile.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let home = (id == "default" || id.isEmpty)
@@ -86,6 +120,13 @@ actor LocalHermesGatewayProvider: HermesGatewayProvider {
         // @target-code-block convention works). Absent when the Deck attaches to
         // a gateway started elsewhere.
         environment["HERMES_DECK"] = "1"
+        if includeRouting {
+            let routingEnvironment = await MainActor.run {
+                DeckRoutingIPCServer.shared
+            }
+            .environmentVariables(waitingUpTo: 2)
+            environment.merge(routingEnvironment) { _, new in new }
+        }
         return environment
     }
 }

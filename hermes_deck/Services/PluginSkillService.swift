@@ -85,6 +85,9 @@ enum HermesSkillListParser {
 }
 
 struct LocalHermesPluginProvider: HermesPluginProvider {
+    static let deckDelegationPluginName = "deck-delegate-agent"
+    static let deckDelegationPluginVersion = "0.1.2"
+
     var configURL: URL
     var userPluginsURL: URL
     var bundledPluginsURL: URL
@@ -137,6 +140,35 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
                 disabledPath: ["tools", "disabled"],
                 in: configURL
             )
+        }.value
+    }
+
+    func installDeckDelegationPlugin(profile: HermesProfile) async throws {
+        let homeURL = Self.home(for: profile, rootURL: rootURL)
+        let pluginURL = homeURL
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent(Self.deckDelegationPluginName, isDirectory: true)
+        let configURL = Self.configURL(for: profile, rootURL: rootURL)
+
+        try await Task.detached(priority: .utility) {
+            try Self.writeDeckDelegationPlugin(to: pluginURL)
+            try Self.setConfiguredName(
+                Self.deckDelegationPluginName,
+                enabled: true,
+                enabledPath: ["plugins", "enabled"],
+                disabledPath: ["plugins", "disabled"],
+                in: configURL
+            )
+        }.value
+    }
+
+    func deckDelegationPluginStatus(profile: HermesProfile) async throws -> DeckDelegationToolStatus {
+        let homeURL = Self.home(for: profile, rootURL: rootURL)
+        let pluginURL = homeURL
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent(Self.deckDelegationPluginName, isDirectory: true)
+        return try await Task.detached(priority: .utility) {
+            try Self.deckDelegationPluginStatus(at: pluginURL)
         }.value
     }
 
@@ -277,6 +309,205 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         process.waitUntilExit()
         return (process.terminationStatus, await outputDataTask.value)
     }
+
+    private static func writeDeckDelegationPlugin(to pluginURL: URL) throws {
+        try FileManager.default.createDirectory(at: pluginURL, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: pluginURL.appendingPathComponent("__pycache__", isDirectory: true))
+        try deckDelegationPluginManifest.write(
+            to: pluginURL.appendingPathComponent("plugin.yaml"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try deckDelegationPluginPython.write(
+            to: pluginURL.appendingPathComponent("__init__.py"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try deckDelegationPluginReadme.write(
+            to: pluginURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private static func deckDelegationPluginStatus(at pluginURL: URL) throws -> DeckDelegationToolStatus {
+        let manifestURL = pluginURL.appendingPathComponent("plugin.yaml")
+        guard FileManager.default.fileExists(atPath: manifestURL.path(percentEncoded: false)) else {
+            return .missing
+        }
+
+        let manifest = HermesConfigurationFile(url: manifestURL)
+        try manifest.load()
+        guard (try manifest.string(at: ["name"])) == deckDelegationPluginName else {
+            return .missing
+        }
+        let installedVersion = try manifest.string(at: ["version"])
+        guard installedVersion == deckDelegationPluginVersion else {
+            return .outdated(installedVersion: installedVersion, bundledVersion: deckDelegationPluginVersion)
+        }
+        return .current(version: deckDelegationPluginVersion)
+    }
+
+    private static let deckDelegationPluginManifest = """
+    name: deck-delegate-agent
+    version: 0.1.2
+    description: "Route delegated prompts from Hermes back to Hermes Deck."
+    author: Hermes Deck
+    kind: standalone
+    provides_tools:
+      - deck_delegate_agent
+    """
+
+    private static let deckDelegationPluginReadme = """
+    # deck-delegate-agent
+
+    Hermes Deck installs this plugin so Hermes agents can call the
+    `deck_delegate_agent` tool.
+
+    The tool validates `target` and `prompt`, then calls back to Hermes Deck
+    through `HERMES_DECK_ROUTE_HOST`, `HERMES_DECK_ROUTE_PORT`, and
+    `HERMES_DECK_ROUTE_TOKEN`. Hermes Deck owns the actual routing, thread
+    updates, and UI handoff.
+    """
+
+    private static let deckDelegationPluginPython = #"""
+    from __future__ import annotations
+
+    import json
+    import os
+    import socket
+    from typing import Any, Dict
+
+
+    TOOL_NAME = "deck_delegate_agent"
+
+
+    SCHEMA: Dict[str, Any] = {
+        "name": TOOL_NAME,
+        "description": (
+            "Delegate a focused prompt to another Hermes Deck agent/profile. "
+            "The Deck app owns routing and UI handoff. Use dry_run only for "
+            "installation tests."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Deck target alias without @, such as coding or researcher.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Self-contained prompt to send to the target agent.",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Request synchronous waiting. Defaults to async queued handoff.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Validate arguments without calling Hermes Deck IPC.",
+                },
+            },
+            "required": ["target", "prompt"],
+        },
+    }
+
+
+    def _json(payload: Dict[str, Any]) -> str:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+    def _error(message: str, **extra: Any) -> str:
+        payload = {"ok": False, "error": message}
+        payload.update(extra)
+        return _json(payload)
+
+
+    def _handle(args: Dict[str, Any], **kwargs: Any) -> str:
+        target = str(args.get("target") or "").strip().lstrip("@")
+        prompt = str(args.get("prompt") or "").strip()
+        wait = bool(args.get("wait") or False)
+        dry_run = bool(args.get("dry_run") or False)
+        source_session_key = str(kwargs.get("task_id") or "").strip()
+        source_profile_id = os.getenv("HERMES_PROFILE", "").strip()
+
+        if not target:
+            return _error("target is required")
+        if not prompt:
+            return _error("prompt is required")
+
+        request = {
+            "target": target,
+            "prompt": prompt,
+            "wait": wait,
+            "source_session_key": source_session_key,
+            "source_profile_id": source_profile_id,
+        }
+        if dry_run:
+            return _json({"ok": True, "dry_run": True, "request": request})
+
+        host = os.getenv("HERMES_DECK_ROUTE_HOST", "").strip()
+        port = os.getenv("HERMES_DECK_ROUTE_PORT", "").strip()
+        token = os.getenv("HERMES_DECK_ROUTE_TOKEN", "").strip()
+        if not token or not host or not port:
+            missing = [
+                name
+                for name, value in {
+                    "HERMES_DECK_ROUTE_HOST": host,
+                    "HERMES_DECK_ROUTE_PORT": port,
+                    "HERMES_DECK_ROUTE_TOKEN": token,
+                }.items()
+                if not value
+            ]
+            return _error(
+                "Hermes Deck routing IPC is not available. Run this tool from a Hermes gateway/session started by the Hermes Deck desktop app, then restart that gateway after installing or updating deck_delegate_agent.",
+                missing=missing,
+                request=request,
+            )
+
+        envelope = dict(request)
+        envelope["token"] = token
+        newline = bytes([10])
+
+        try:
+            client = socket.create_connection((host, int(port)), timeout=10)
+            with client:
+                client.settimeout(10)
+                client.sendall(json.dumps(envelope, ensure_ascii=False).encode("utf-8") + newline)
+                chunks = []
+                while True:
+                    chunk = client.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if newline in chunk:
+                        break
+        except (OSError, ValueError) as exc:
+            return _error(f"Failed to call Hermes Deck routing IPC: {exc}", request=request)
+
+        raw = b"".join(chunks).split(newline, 1)[0].decode("utf-8", errors="replace")
+        if not raw.strip():
+            return _error("Hermes Deck routing IPC returned an empty response", request=request)
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError:
+            return _error("Hermes Deck routing IPC returned non-JSON", raw=raw, request=request)
+        if isinstance(response, dict):
+            return _json(response)
+        return _json({"ok": True, "response": response})
+
+
+    def register(ctx) -> None:
+        ctx.register_tool(
+            name=TOOL_NAME,
+            toolset="deck",
+            schema=SCHEMA,
+            handler=_handle,
+            description=SCHEMA["description"],
+            emoji="",
+        )
+    """#
 
     private static func configuredStatuses(from configURL: URL) throws -> [String: String] {
         let config = HermesConfigurationFile(url: configURL)

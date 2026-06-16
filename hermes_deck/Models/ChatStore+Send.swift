@@ -62,6 +62,11 @@ extension ChatStore {
         }
     }
 
+    private func bindHermesSession(_ sessionID: String, to threadID: UUID) {
+        guard !sessionID.isEmpty, let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
+        threads[index].hermesSessionID = sessionID
+    }
+
     /// Slash commands handled by the app's own UI (or not meaningful here), so
     /// they are ignored rather than run through the gateway.
     private static let ignoredSlashCommands: Set<String> = ["help", "model", "history", "redraw"]
@@ -216,6 +221,9 @@ extension ChatStore {
             )
             for try await event in agentClient.eventStream(for: request) {
                 try Task.checkCancellation()
+                if let eventSessionID = event.sessionIDForDeckThreadBinding {
+                    bindHermesSession(eventSessionID, to: threadID)
+                }
                 switch event {
                 case .messageStart:
                     if assistantMessageID == nil {
@@ -264,7 +272,7 @@ extension ChatStore {
                     let id = assistantMessageID ?? appendAssistantDraft(to: threadID)
                     assistantMessageID = id
                     upsertToolEvent(messageID: id, tool, in: threadID)
-                case .clarifyRequest(_, let question, let choices):
+                case .clarifyRequest(_, let requestID, let question, let choices):
                     let id = assistantMessageID ?? appendAssistantDraft(to: threadID)
                     assistantMessageID = id
                     finalizeOpenThinking(messageID: id, in: threadID)
@@ -272,7 +280,8 @@ extension ChatStore {
                         question: question.trimmingCharacters(in: .whitespacesAndNewlines),
                         choices: choices
                             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .filter { !$0.isEmpty }
+                            .filter { !$0.isEmpty },
+                        requestID: requestID
                     )
                     appendClarification(messageID: id, clarification, in: threadID)
                     showClarificationRequest(clarification, for: threadID, usesGlobalSendState: usesGlobalSendState)

@@ -3,6 +3,95 @@ import Foundation
 /// `@mention` routing: alias resolution, prompt fan-out to mentioned
 /// agents, and single-hop forwarding of addressed agent replies.
 extension ChatStore {
+    func startDeckRoutingIPC() {
+        do {
+            try DeckRoutingIPCServer.shared.start { [self] request in
+                await MainActor.run {
+                    return self.handleDeckRoutingIPCRequest(request)
+                }
+            }
+        } catch {
+            if let selectedThreadID {
+                append(ChatMessage(role: .system, content: "Deck routing IPC failed to start: \(error.localizedDescription)"), to: selectedThreadID)
+            }
+        }
+    }
+
+    func handleDeckRoutingIPCRequest(_ request: DeckRoutingIPCRequest) -> DeckRoutingIPCResponse {
+        let sessionKey = request.sourceSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !sessionKey.isEmpty else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "Missing source_session_key")
+        }
+        guard let sourceThread = deckRoutingSourceThread(for: request, sessionKey: sessionKey) else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "No Deck thread is bound to source_session_key \(sessionKey)")
+        }
+        var target = request.target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if target.hasPrefix("@") {
+            target.removeFirst()
+        }
+        let prompt = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !prompt.isEmpty else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "Both target and prompt are required")
+        }
+
+        let routedText = "@\(target)\n\(prompt)"
+        let visibleRoutingBlock = """
+        ```\(AgentMentionRouteParser.routingFenceInfo)
+        \(routedText)
+        ```
+        """
+        append(
+            ChatMessage(role: .assistant, content: visibleRoutingBlock, completedAt: .now),
+            to: sourceThread.id
+        )
+        Task { @MainActor [self] in
+            let result = await routePromptIfAllowed(
+                routedText,
+                from: .hermes(profile: sourceThread.profile),
+                sourceThreadID: sourceThread.id,
+                appendUserMessage: false,
+                closesLoopToSource: true
+            )
+            if case .denied(let reason) = result {
+                append(ChatMessage(role: .system, content: "Deck delegation tool could not route: \(reason)."), to: sourceThread.id)
+            } else if result == .notMention {
+                append(ChatMessage(role: .system, content: "Deck delegation tool could not route to @\(target)."), to: sourceThread.id)
+            }
+        }
+
+        return DeckRoutingIPCResponse(ok: true, status: "queued", error: nil)
+    }
+
+    private func deckRoutingSourceThread(for request: DeckRoutingIPCRequest, sessionKey: String) -> ChatThread? {
+        if let sourceThread = threads.first(where: { $0.hermesSessionID == sessionKey }) {
+            return sourceThread
+        }
+
+        let profileID = request.sourceProfileID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !profileID.isEmpty else { return nil }
+
+        let candidates = threads.filter {
+            $0.profile.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == profileID
+        }
+        let sourceThread: ChatThread?
+        if let selectedThreadID,
+           let selected = candidates.first(where: { $0.id == selectedThreadID }) {
+            sourceThread = selected
+        } else if candidates.count == 1 {
+            sourceThread = candidates[0]
+        } else {
+            sourceThread = candidates.last
+        }
+
+        if let sourceThread,
+           let index = threads.firstIndex(where: { $0.id == sourceThread.id }) {
+            threads[index].hermesSessionID = sessionKey
+        }
+        return sourceThread
+    }
+
     var externalAgentMentionTargets: [ExternalAgentMentionTarget] {
         [
             ExternalAgentMentionTarget(

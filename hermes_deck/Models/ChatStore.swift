@@ -41,6 +41,8 @@ final class ChatStore {
     var historySessions: [HermesSessionListItem] = []
     var modelListState: HermesModelListState = .idle
     var toolListState: HermesToolListState = .idle
+    var deckDelegationToolInstallState: DeckDelegationToolInstallState = .idle
+    var deckDelegationToolStatus: DeckDelegationToolStatus = .missing
     var skillListState: HermesSkillListState = .idle
     var jobListState: HermesJobListState = .idle
     var kanbanListState: HermesKanbanListState = .idle

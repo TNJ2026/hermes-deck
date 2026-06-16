@@ -108,6 +108,32 @@ extension ChatStore {
         agentPendingClarificationRequests[threadID] = nil
     }
 
+    func answerClarificationRequest(_ request: ClarificationRequest?, answer: String, forAgentThreadID threadID: UUID?) {
+        let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else { return }
+        if let requestID = request?.requestID?.trimmingCharacters(in: .whitespacesAndNewlines), !requestID.isEmpty {
+            let client = agentClient
+            Task { await client.respondToClarification(requestID: requestID, answer: answer) }
+        } else {
+            if let threadID {
+                if let thread = threads.first(where: { $0.id == threadID }) {
+                    Task {
+                        await sendAgentProfile(answer, in: threadID, profile: thread.profile)
+                    }
+                }
+            } else {
+                Task {
+                    await send(answer)
+                }
+            }
+        }
+        if let threadID {
+            dismissClarificationRequest(forAgentThreadID: threadID)
+        } else {
+            dismissClarificationRequest()
+        }
+    }
+
 #if DEBUG
     func simulatePermissionRequest() {
         guard let selectedThreadID else { return }
@@ -163,7 +189,8 @@ extension ChatStore {
             .filter { !$0.isEmpty }
         let clarification = ClarificationRequest(
             question: normalizedQuestion.isEmpty ? "Hermes needs more information." : normalizedQuestion,
-            choices: normalizedChoices
+            choices: normalizedChoices,
+            requestID: request.requestID
         )
         if usesGlobalSendState {
             pendingClarificationRequest = clarification

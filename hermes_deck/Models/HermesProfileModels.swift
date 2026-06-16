@@ -78,6 +78,19 @@ enum HermesToolListState: Equatable, Sendable {
     case failed(String)
 }
 
+enum DeckDelegationToolInstallState: Equatable, Sendable {
+    case idle
+    case installing
+    case installed
+    case failed(String)
+}
+
+enum DeckDelegationToolStatus: Equatable, Sendable {
+    case missing
+    case current(version: String)
+    case outdated(installedVersion: String?, bundledVersion: String)
+}
+
 enum HermesSkillListState: Equatable, Sendable {
     case idle
     case loading

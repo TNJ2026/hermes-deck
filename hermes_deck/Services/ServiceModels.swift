@@ -319,8 +319,39 @@ enum HermesAgentEvent: Equatable, Sendable {
     case subagentProgress(sessionID: String, progress: SubagentProgressEvent)
     case subagentComplete(sessionID: String, progress: SubagentProgressEvent)
     case approvalRequest(sessionID: String, requestID: String?, text: String, options: [PermissionOption])
-    case clarifyRequest(sessionID: String, question: String, choices: [String])
+    case clarifyRequest(sessionID: String, requestID: String?, question: String, choices: [String])
     case error(sessionID: String?, message: String)
+}
+
+extension HermesAgentEvent {
+    var sessionIDForDeckThreadBinding: String? {
+        switch self {
+        case .gatewayReady:
+            nil
+        case .sessionInfo(let id, _),
+             .messageStart(let id),
+             .messageDelta(let id, _),
+             .messageComplete(let id, _, _, _),
+             .statusUpdate(let id, _),
+             .toolStart(let id, _),
+             .toolGenerating(let id, _),
+             .toolComplete(let id, _),
+             .thinkingDelta(let id, _),
+             .reasoningDelta(let id, _),
+             .reasoningAvailable(let id, _),
+             .subagentSpawnRequested(let id, _),
+             .subagentStart(let id, _),
+             .subagentThinking(let id, _),
+             .subagentTool(let id, _),
+             .subagentProgress(let id, _),
+             .subagentComplete(let id, _),
+             .approvalRequest(let id, _, _, _),
+             .clarifyRequest(let id, _, _, _):
+            id
+        case .error(let id, _):
+            id
+        }
+    }
 }
 
 protocol HermesAgentClient: Sendable {
@@ -329,6 +360,8 @@ protocol HermesAgentClient: Sendable {
     /// Answers a permission request the agent raised mid-turn. Default no-op for
     /// clients whose approval flow is display-only (e.g. the Hermes gateway).
     func respondToPermission(requestID: String, optionID: String) async
+    /// Answers a blocking clarify request the agent raised mid-turn.
+    func respondToClarification(requestID: String, answer: String) async
     /// Optionally boots a backend ahead of the first prompt. Default no-op.
     func warmUp(backend: AgentBackend) async
     /// Executes a Hermes `/slash` command and returns its text output. Default
@@ -377,11 +410,23 @@ protocol HermesPluginProvider: Sendable {
     func installedTools() async throws -> [HermesInstalledTool]
     func setPlugin(_ name: String, enabled: Bool) async throws
     func setTool(_ name: String, enabled: Bool) async throws
+    func installDeckDelegationPlugin(profile: HermesProfile) async throws
+    func deckDelegationPluginStatus(profile: HermesProfile) async throws -> DeckDelegationToolStatus
     func installedTools(profile: HermesProfile) async throws -> [HermesInstalledTool]
     func setTool(_ name: String, enabled: Bool, profile: HermesProfile) async throws
 }
 
 extension HermesPluginProvider {
+    func installDeckDelegationPlugin(profile: HermesProfile) async throws {
+        throw NSError(
+            domain: "HermesPlugins",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Installing Deck delegation tool is not supported by this provider."]
+        )
+    }
+    func deckDelegationPluginStatus(profile: HermesProfile) async throws -> DeckDelegationToolStatus {
+        .missing
+    }
     func installedTools(profile: HermesProfile) async throws -> [HermesInstalledTool] {
         try await installedTools()
     }
@@ -436,6 +481,7 @@ extension HermesJobProvider {
 
 extension HermesAgentClient {
     func respondToPermission(requestID: String, optionID: String) async {}
+    func respondToClarification(requestID: String, answer: String) async {}
 
     func warmUp(backend: AgentBackend) async {}
 

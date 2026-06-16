@@ -1164,6 +1164,34 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func deckRoutingIPCFallsBackToSourceProfileWhenSessionIsNotBoundYet() async throws {
+        let coding = HermesProfile(id: "coding", displayName: "Coding")
+        let sourceThread = ChatThread(title: "Coding", profile: coding)
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: "ok"), threads: [sourceThread])
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            coding,
+        ]
+        store.selectedThreadID = sourceThread.id
+
+        let response = store.handleDeckRoutingIPCRequest(DeckRoutingIPCRequest(
+            token: "token",
+            target: "default",
+            prompt: "please check this",
+            wait: false,
+            sourceSessionKey: "gateway-session",
+            sourceProfileID: "coding"
+        ))
+
+        #expect(response.ok == true)
+        #expect(response.status == "queued")
+        #expect(store.thread(id: sourceThread.id)?.hermesSessionID == "gateway-session")
+        let messages = try #require(store.thread(id: sourceThread.id)?.messages)
+        #expect(messages.last?.role == .assistant)
+        #expect(messages.last?.content.contains("```AgentRouting\n@default\nplease check this\n```") == true)
+    }
+
+    @Test
     func externalAgentReplyAttributionParsesKnownSourcesOnly() throws {
         #expect(ExternalAgentReplyAttribution.parse("Claude Code:\n\nDone")?.source == .claude)
         #expect(ExternalAgentReplyAttribution.parse("Codex:\n\nDone")?.source == .codex)
@@ -1368,7 +1396,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     @Test
     func clarifyRequestsAttachToAssistantMessage() async throws {
         let client = StubStreamingHermesAgentClient(events: [
-            .clarifyRequest(sessionID: "s1", question: "Pick one", choices: ["A", "B"]),
+            .clarifyRequest(sessionID: "s1", requestID: "clarify-1", question: "Pick one", choices: ["A", "B"]),
             .messageComplete(sessionID: "s1", text: "", status: "complete", usage: nil),
         ])
         let store = ChatStore(agentClient: client)
@@ -1382,13 +1410,14 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(assistant?.clarifications.first?.choices == ["A", "B"])
         #expect(store.pendingClarificationRequest?.question == "Pick one")
         #expect(store.pendingClarificationRequest?.choices == ["A", "B"])
+        #expect(store.pendingClarificationRequest?.requestID == "clarify-1")
         #expect(store.sendState == .idle)
     }
 
     @Test
     func agentClarifyRequestsAreSeparateFromMainComposer() async throws {
         let client = StubStreamingHermesAgentClient(events: [
-            .clarifyRequest(sessionID: "agent", question: "Need target?", choices: []),
+            .clarifyRequest(sessionID: "agent", requestID: "agent-clarify", question: "Need target?", choices: []),
             .messageComplete(sessionID: "agent", text: "", status: "complete", usage: nil),
         ])
         let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
@@ -1401,6 +1430,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(store.pendingClarificationRequest == nil)
         #expect(store.pendingClarificationRequest(forAgentThreadID: agentThreadID)?.question == "Need target?")
         #expect(store.pendingClarificationRequest(forAgentThreadID: agentThreadID)?.choices == [])
+        #expect(store.pendingClarificationRequest(forAgentThreadID: agentThreadID)?.requestID == "agent-clarify")
     }
 
     @Test
@@ -1434,6 +1464,27 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         #expect(clarifyCaseSource.contains("showClarificationRequest"))
         #expect(clarifyCaseSource.contains("setSendState(.idle, for: threadID, usesGlobalSendState: usesGlobalSendState)"))
+    }
+
+    @Test
+    func answeringClarifyRequestRespondsToGatewayWithoutStartingNewPrompt() async throws {
+        let client = RecordingStreamingHermesAgentClient(events: [])
+        let store = ChatStore(agentClient: client)
+        let request = ClarificationRequest(question: "Pick one", choices: ["A", "B"], requestID: "clarify-1")
+        guard let threadID = store.selectedThreadID else {
+            Issue.record("Expected selected thread")
+            return
+        }
+        store.showClarificationRequest(request, for: threadID, usesGlobalSendState: true)
+
+        store.answerClarificationRequest(store.pendingClarificationRequest, answer: " B ", forAgentThreadID: nil)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let responses = await client.clarificationResponses
+        #expect(responses.count == 1)
+        #expect(responses.first?.0 == "clarify-1")
+        #expect(responses.first?.1 == "B")
+        #expect(store.pendingClarificationRequest == nil)
     }
 
     @Test
@@ -1967,6 +2018,57 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func installingDeckDelegationPluginWritesPluginAndEnablesProfile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hermes-deck-plugin-install-\(UUID().uuidString)", isDirectory: true)
+        let provider = LocalHermesPluginProvider(
+            configURL: root.appendingPathComponent("config.yaml"),
+            userPluginsURL: root.appendingPathComponent("plugins", isDirectory: true),
+            bundledPluginsURL: root.appendingPathComponent("bundled", isDirectory: true),
+            rootURL: root
+        )
+        let profile = HermesProfile(id: "coding", displayName: "Coding")
+
+        try await provider.installDeckDelegationPlugin(profile: profile)
+
+        let home = root.appendingPathComponent("profiles").appendingPathComponent("coding")
+        let pluginDirectory = home
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent("deck-delegate-agent", isDirectory: true)
+        let manifest = try String(contentsOf: pluginDirectory.appendingPathComponent("plugin.yaml"), encoding: .utf8)
+        let source = try String(contentsOf: pluginDirectory.appendingPathComponent("__init__.py"), encoding: .utf8)
+        #expect(manifest.contains("provides_tools:\n  - deck_delegate_agent"))
+        #expect(manifest.contains("version: 0.1.2"))
+        #expect(source.contains("TOOL_NAME = \"deck_delegate_agent\""))
+        #expect(source.contains("\"source_profile_id\": source_profile_id"))
+        #expect(!source.contains("HERMES_DECK_ROUTE_SOCKET"))
+
+        let config = HermesConfigurationFile(url: home.appendingPathComponent("config.yaml"))
+        try config.load()
+        #expect(try config.stringArray(at: ["plugins", "enabled"]) == ["deck-delegate-agent"])
+        #expect(try config.stringArray(at: ["plugins", "disabled"]) == [])
+    }
+
+    @Test
+    func deckDelegationPluginStatusDetectsOutdatedPlugin() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hermes-deck-plugin-status-\(UUID().uuidString)", isDirectory: true)
+        let provider = LocalHermesPluginProvider(rootURL: root)
+        let profile = HermesProfile(id: "coding", displayName: "Coding")
+        let pluginDirectory = root
+            .appendingPathComponent("profiles/coding/plugins/deck-delegate-agent", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        try """
+        name: deck-delegate-agent
+        version: 0.1.0
+        """.write(to: pluginDirectory.appendingPathComponent("plugin.yaml"), atomically: true, encoding: .utf8)
+
+        let status = try await provider.deckDelegationPluginStatus(profile: profile)
+
+        #expect(status == .outdated(installedVersion: "0.1.0", bundledVersion: "0.1.2"))
+    }
+
+    @Test
     func loadingInstalledToolsUpdatesStoreState() async {
         let provider = StubHermesPluginProvider(
             plugins: [],
@@ -1993,6 +2095,24 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         }
         #expect(tools.map(\.name) == ["gateway_chat"])
         #expect(tools.first?.summary == "Chat with child Hermes gateways")
+    }
+
+    @Test
+    func installingDeckDelegationToolUpdatesStoreStateAndReloadsTools() async {
+        let provider = StubHermesPluginProvider(plugins: [], tools: [])
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: "ok"), pluginProvider: provider)
+        store.selectedProfile = HermesProfile(id: "coding", displayName: "Coding")
+
+        await store.installDeckDelegationTool()
+
+        #expect(provider.installedDeckDelegationProfiles == ["coding"])
+        #expect(store.deckDelegationToolInstallState == .installed)
+        guard case .loaded(let tools) = store.toolListState else {
+            Issue.record("Expected loaded tool list state")
+            return
+        }
+        #expect(tools.map(\.name) == ["deck"])
+        #expect(tools.first?.status == "Enabled")
     }
 
     @Test
@@ -2625,6 +2745,7 @@ private final class StubDelayingHermesSessionProvider: HermesSessionProvider, @u
 @MainActor private final class RecordingStreamingHermesAgentClient: HermesAgentClient {
     let events: [HermesAgentEvent]
     private var recordedPermissionResponses: [(String, String)] = []
+    private var recordedClarificationResponses: [(String, String)] = []
 
     init(events: [HermesAgentEvent]) {
         self.events = events
@@ -2632,6 +2753,10 @@ private final class StubDelayingHermesSessionProvider: HermesSessionProvider, @u
 
     var permissionResponses: [(String, String)] {
         recordedPermissionResponses
+    }
+
+    var clarificationResponses: [(String, String)] {
+        recordedClarificationResponses
     }
 
     func send(_ request: HermesChatRequest) async throws -> HermesChatResponse {
@@ -2653,6 +2778,10 @@ private final class StubDelayingHermesSessionProvider: HermesSessionProvider, @u
 
     func respondToPermission(requestID: String, optionID: String) async {
         recordedPermissionResponses.append((requestID, optionID))
+    }
+
+    func respondToClarification(requestID: String, answer: String) async {
+        recordedClarificationResponses.append((requestID, answer))
     }
 }
 
@@ -2693,8 +2822,10 @@ private final class StubHermesJobProvider: HermesJobProvider, @unchecked Sendabl
 private final class StubHermesPluginProvider: HermesPluginProvider, @unchecked Sendable {
     var plugins: [HermesInstalledPlugin]
     var tools: [HermesInstalledTool] = []
+    var deckDelegationStatus: DeckDelegationToolStatus = .missing
     var updatedPlugins: [(String, Bool)] = []
     var updatedTools: [(String, Bool)] = []
+    var installedDeckDelegationProfiles: [String] = []
 
     init(plugins: [HermesInstalledPlugin], tools: [HermesInstalledTool] = []) {
         self.plugins = plugins
@@ -2727,6 +2858,24 @@ private final class StubHermesPluginProvider: HermesPluginProvider, @unchecked S
             updated.status = enabled ? "Enabled" : "Disabled"
             return updated
         }
+    }
+
+    func installDeckDelegationPlugin(profile: HermesProfile) async throws {
+        installedDeckDelegationProfiles.append(profile.id)
+        deckDelegationStatus = .current(version: "0.1.2")
+        tools = [
+            HermesInstalledTool(
+                id: "Plugin-deck",
+                name: "deck",
+                source: "Plugin",
+                status: "Enabled",
+                summary: "Deck"
+            ),
+        ]
+    }
+
+    func deckDelegationPluginStatus(profile: HermesProfile) async throws -> DeckDelegationToolStatus {
+        deckDelegationStatus
     }
 }
 

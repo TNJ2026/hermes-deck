@@ -22,6 +22,7 @@ xcuserdata/
 
 # Misc
 *.log
+__pycache__/
 
 # Local drafts
 ARTICLE.zh-CN.md

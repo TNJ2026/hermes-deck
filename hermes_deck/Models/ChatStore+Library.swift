@@ -38,7 +38,7 @@ extension ChatStore {
     func startGateway(for profile: HermesProfile) async {
         guard !startingGatewayProfiles.contains(profile.id) else { return }
         startingGatewayProfiles.insert(profile.id)
-        try? await gatewayProvider.start(profile: profile)
+        try? await gatewayProvider.restart(profile: profile)
         // Poll until the gateway reports running (or give up after ~12s).
         for _ in 0..<20 {
             try? await Task.sleep(for: .milliseconds(600))
@@ -85,8 +85,13 @@ extension ChatStore {
         toolListState = .loading
         let profile = selectedProfile
         do {
-            toolListState = .loaded(try await pluginProvider.installedTools(profile: profile))
+            let status = try await pluginProvider.deckDelegationPluginStatus(profile: profile)
+            let tools = try await pluginProvider.installedTools(profile: profile)
+            guard profile.id == selectedProfile.id else { return }
+            deckDelegationToolStatus = status
+            toolListState = .loaded(tools)
         } catch {
+            guard profile.id == selectedProfile.id else { return }
             toolListState = .failed(error.localizedDescription)
         }
     }
@@ -95,9 +100,29 @@ extension ChatStore {
         let profile = selectedProfile
         do {
             try await pluginProvider.setTool(tool.name, enabled: enabled, profile: profile)
-            toolListState = .loaded(try await pluginProvider.installedTools(profile: profile))
+            let tools = try await pluginProvider.installedTools(profile: profile)
+            guard profile.id == selectedProfile.id else { return }
+            toolListState = .loaded(tools)
         } catch {
+            guard profile.id == selectedProfile.id else { return }
             toolListState = .failed(error.localizedDescription)
+        }
+    }
+
+    func installDeckDelegationTool() async {
+        deckDelegationToolInstallState = .installing
+        let profile = selectedProfile
+        do {
+            try await pluginProvider.installDeckDelegationPlugin(profile: profile)
+            let status = try await pluginProvider.deckDelegationPluginStatus(profile: profile)
+            let tools = try await pluginProvider.installedTools(profile: profile)
+            guard profile.id == selectedProfile.id else { return }
+            deckDelegationToolInstallState = .installed
+            deckDelegationToolStatus = status
+            toolListState = .loaded(tools)
+        } catch {
+            guard profile.id == selectedProfile.id else { return }
+            deckDelegationToolInstallState = .failed(error.localizedDescription)
         }
     }
 
@@ -105,8 +130,11 @@ extension ChatStore {
         skillListState = .loading
         let profile = selectedProfile
         do {
-            skillListState = .loaded(try await skillProvider.installedSkills(profile: profile))
+            let skills = try await skillProvider.installedSkills(profile: profile)
+            guard profile.id == selectedProfile.id else { return }
+            skillListState = .loaded(skills)
         } catch {
+            guard profile.id == selectedProfile.id else { return }
             skillListState = .failed(error.localizedDescription)
         }
     }
@@ -115,8 +143,11 @@ extension ChatStore {
         let profile = selectedProfile
         do {
             try await skillProvider.setSkill(skill.name, enabled: enabled, profile: profile)
-            skillListState = .loaded(try await skillProvider.installedSkills(profile: profile))
+            let skills = try await skillProvider.installedSkills(profile: profile)
+            guard profile.id == selectedProfile.id else { return }
+            skillListState = .loaded(skills)
         } catch {
+            guard profile.id == selectedProfile.id else { return }
             skillListState = .failed(error.localizedDescription)
         }
     }

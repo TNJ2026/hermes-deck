@@ -442,10 +442,9 @@ struct ComposerView: View {
     private func answerClarification(_ answer: String) {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else { return }
-        dismissClarificationRequest()
+        store.answerClarificationRequest(clarificationRequest, answer: trimmed, forAgentThreadID: composerThreadID)
         speechTranscriber.stopRecording()
         draft = ""
-        startSendTask(message: trimmed)
     }
 
     private func toggleVoiceInput() {
