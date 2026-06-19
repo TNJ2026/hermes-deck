@@ -10,13 +10,14 @@ struct MessageBubble: View, Equatable {
     /// to the wide main-chat column; the narrow right-sidebar panels pass a
     /// tighter value so replies get more width. User bubbles are unaffected.
     var assistantTrailingInset: CGFloat = 80
+    var onClarificationAnswer: ((ClarificationRequest, String) -> Void)?
 
     var body: some View {
         HStack(alignment: .top) {
             if message.role == .user { Spacer(minLength: 80) }
             VStack(alignment: .leading, spacing: 8) {
                 if !message.segments.isEmpty {
-                    SegmentTimeline(segments: message.segments)
+                    SegmentTimeline(segments: message.segments, onClarificationAnswer: onClarificationAnswer)
                 }
                 if hasMessageCard {
                     VStack(alignment: .leading, spacing: 8) {
@@ -62,6 +63,11 @@ struct MessageBubble: View, Equatable {
             if message.role != .user { Spacer(minLength: assistantTrailingInset) }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
+        lhs.message == rhs.message
+            && lhs.assistantTrailingInset == rhs.assistantTrailingInset
     }
 
     private var hasMessageCard: Bool {

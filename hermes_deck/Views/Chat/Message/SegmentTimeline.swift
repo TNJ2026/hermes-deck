@@ -36,6 +36,7 @@ func abbreviatedDuration(_ seconds: TimeInterval) -> String {
 
 struct SegmentTimeline: View {
     let segments: [AssistantSegment]
+    var onClarificationAnswer: ((ClarificationRequest, String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -46,7 +47,7 @@ struct SegmentTimeline: View {
                 case .tools(let events):
                     ToolCallSection(events: events)
                 case .clarifications(let items):
-                    ClarifySection(clarifications: items)
+                    ClarifySection(clarifications: items, onAnswer: onClarificationAnswer)
                 }
             }
         }

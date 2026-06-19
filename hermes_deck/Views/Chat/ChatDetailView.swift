@@ -61,7 +61,11 @@ struct ChatDetailView: View {
                                 // are not displayed — the hand-off status cards
                                 // below the triggering bubble show the replies.
                                 ForEach(visibleMessages(in: thread)) { message in
-                                    MessageBubble(message: message, assistantTrailingInset: assistantTrailingInset)
+                                    MessageBubble(
+                                        message: message,
+                                        assistantTrailingInset: assistantTrailingInset,
+                                        onClarificationAnswer: answerClarification
+                                    )
                                         .equatable()
                                         .id(message.id)
                                     if let batch = store.threadHandoffs[thread.id],
@@ -287,7 +291,6 @@ struct ChatDetailView: View {
     /// has rendered yet; it disappears once content/segments arrive or the turn
     /// ends.
     private var showsThinkingIndicator: Bool {
-        guard sendBackend != .hermes else { return false }  // only ACP/CLI agent panels
         guard isSending, let thread = displayedThread else { return false }
         guard let last = thread.messages.last else { return true }
         guard last.role == .assistant else { return true }
@@ -361,6 +364,21 @@ struct ChatDetailView: View {
         } else {
             store.dismissClarificationRequest()
         }
+    }
+
+    private func answerClarification(_ request: ClarificationRequest, answer: String) {
+        guard let activeRequest = activeClarificationRequest(matching: request) else { return }
+        store.answerClarificationRequest(activeRequest, answer: answer, forAgentThreadID: threadID)
+    }
+
+    private func activeClarificationRequest(matching request: ClarificationRequest) -> ClarificationRequest? {
+        guard let activeRequest = composerClarificationRequest else { return nil }
+        let activeRequestID = activeRequest.requestID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let requestID = request.requestID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !activeRequestID.isEmpty || !requestID.isEmpty {
+            return activeRequestID == requestID ? activeRequest : nil
+        }
+        return activeRequest.id == request.id ? activeRequest : nil
     }
 
     private func simulatePermissionRequest() {

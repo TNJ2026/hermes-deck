@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ClarifySection: View {
     let clarifications: [ClarificationRequest]
+    var onAnswer: ((ClarificationRequest, String) -> Void)?
 
     var body: some View {
         ProcessSection(
@@ -34,11 +35,17 @@ struct ClarifySection: View {
                     if !clarification.choices.isEmpty {
                         FlowLayout(spacing: 6) {
                             ForEach(clarification.choices, id: \.self) { choice in
-                                Text(choice)
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                Button {
+                                    onAnswer?(clarification, choice)
+                                } label: {
+                                    Text(choice)
+                                        .font(.caption)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(onAnswer == nil)
                             }
                         }
                         .padding(.leading, 18)
