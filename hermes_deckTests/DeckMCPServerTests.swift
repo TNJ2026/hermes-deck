@@ -3,12 +3,36 @@ import Testing
 @testable import hermes_deck
 
 struct DeckMCPServerTests {
+    @Test func agentPanelMCPWiresEachCLI() throws {
+        try DeckMCPServer.shared.start { _, _ in "ok" } // ensure the endpoint is up
+
+        // codex: config overrides on argv + bearer token via env var.
+        let codex = AgentPanelMCP.configure(backend: .acp(.codex), sessionID: UUID())
+        #expect(codex.args.contains("-c"))
+        #expect(codex.args.contains { $0.hasPrefix("mcp_servers.deck.url=") })
+        #expect(codex.args.contains("mcp_servers.deck.bearer_token_env_var=\"HERMES_DECK_MCP_TOKEN\""))
+        #expect(codex.environment["HERMES_DECK_MCP_TOKEN"]?.isEmpty == false)
+
+        // claude: a written --mcp-config file carrying the bearer header.
+        let session = UUID()
+        let claude = AgentPanelMCP.configure(backend: .claudeCLI, sessionID: session)
+        let flagIndex = try #require(claude.args.firstIndex(of: "--mcp-config"))
+        let path = claude.args[claude.args.index(after: flagIndex)]
+        let json = try #require(try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
+        let deck = ((json["mcpServers"] as? [String: Any])?["deck"] as? [String: Any])
+        #expect(deck?["type"] as? String == "http")
+        let auth = (deck?["headers"] as? [String: Any])?["Authorization"] as? String
+        #expect(auth?.hasPrefix("Bearer ") == true)
+        // Token matches the one minted for this session.
+        #expect(auth == "Bearer \(DeckMCPServer.shared.token(forSession: session.uuidString))")
+    }
+
     @Test func deckReplyMCPHandshakeAndToolCall() async throws {
         let server = DeckMCPServer.shared
-        try server.start { message in "received: \(message)" }
+        try server.start { session, message in "received from \(session): \(message)" }
         let endpoint = try #require(server.endpointURL())
         let url = try #require(URL(string: endpoint))
-        let token = server.token
+        let token = server.token(forSession: "panel-1")
 
         func rpc(_ payload: [String: Any], auth: Bool = true) async throws -> (Int, [String: Any]) {
             var request = URLRequest(url: url)
@@ -46,6 +70,6 @@ struct DeckMCPServerTests {
             "params": ["name": "deck_reply", "arguments": ["message": "hi there"]],
         ])
         let content = ((callJSON["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first
-        #expect(content?["text"] as? String == "received: hi there")
+        #expect(content?["text"] as? String == "received from panel-1: hi there")
     }
 }

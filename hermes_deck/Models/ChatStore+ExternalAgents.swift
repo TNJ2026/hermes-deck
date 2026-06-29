@@ -125,6 +125,7 @@ extension ChatStore {
         return AgentTerminalSessionStore.shared.submitPrompt(
             prompt,
             id: threadID,
+            backend: backend,
             command: command,
             workingDirectory: agentWorkingDirectory(for: threadID)
         )

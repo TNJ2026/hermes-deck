@@ -1,29 +1,32 @@
 import Foundation
 import Network
 
-/// Minimal Streamable-HTTP MCP server hosted in-process, exposing a single
-/// `deck_reply` tool. Lets the panel CLIs (claude / codex / gemini — all of
-/// which speak streamable-HTTP MCP) discover and call the tool natively, so the
-/// reply convention need not be pasted into the terminal. PoC scope: one tool,
-/// `application/json` responses (no SSE stream), bearer-token auth.
+/// In-process Streamable-HTTP MCP server exposing a single `deck_reply` tool to
+/// the panel CLIs (claude / codex / gemini — all speak streamable-HTTP MCP).
+/// The CLI discovers and calls the tool natively, so the reply convention is
+/// never pasted into the terminal. Each panel gets its own bearer token; the
+/// token identifies which panel is replying, so the Deck can close the loop
+/// back to whoever delegated there.
 final class DeckMCPServer: @unchecked Sendable {
     static let shared = DeckMCPServer()
 
-    /// Returns a user-facing result string for a `deck_reply` call.
-    typealias ToolHandler = @Sendable (_ message: String) async -> String
+    /// Closes the loop for a panel reply. Returns a short status string shown to
+    /// the calling agent.
+    typealias ReplyHandler = @Sendable (_ panelSession: String, _ message: String) async -> String
 
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "deck-mcp-http")
     nonisolated(unsafe) private var listener: NWListener?
     nonisolated(unsafe) private var port: UInt16?
-    nonisolated(unsafe) private var handler: ToolHandler?
-    let token = UUID().uuidString
+    nonisolated(unsafe) private var handler: ReplyHandler?
+    nonisolated(unsafe) private var sessionForToken: [String: String] = [:]
+    nonisolated(unsafe) private var tokenForSession: [String: String] = [:]
 
     private init() {}
 
-    func start(toolHandler: @escaping ToolHandler) throws {
+    func start(replyHandler: @escaping ReplyHandler) throws {
         lock.lock()
-        handler = toolHandler
+        handler = replyHandler
         let already = listener != nil
         lock.unlock()
         guard !already else { return }
@@ -38,6 +41,18 @@ final class DeckMCPServer: @unchecked Sendable {
         }
         listener.start(queue: queue)
         lock.lock(); self.listener = listener; lock.unlock()
+    }
+
+    /// A stable bearer token for `panelSession`, minted on first use. The panel
+    /// hands this to its CLI's MCP config so the tool call is attributable.
+    func token(forSession panelSession: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = tokenForSession[panelSession] { return existing }
+        let token = UUID().uuidString
+        tokenForSession[panelSession] = token
+        sessionForToken[token] = panelSession
+        return token
     }
 
     nonisolated func endpointURL(waitingUpTo timeout: TimeInterval = 2) -> String? {
@@ -62,29 +77,22 @@ final class DeckMCPServer: @unchecked Sendable {
             guard let self else { return }
             var data = buffer
             if let chunk { data.append(chunk) }
-
             if let (headers, body, complete) = Self.parseRequest(data) {
                 if complete {
                     self.respond(headers: headers, body: body, on: connection)
                 } else {
-                    self.receive(connection, buffer: data) // need the rest of the body
+                    self.receive(connection, buffer: data)
                 }
                 return
             }
-            if isComplete || error != nil {
-                connection.cancel()
-                return
-            }
+            if isComplete || error != nil { connection.cancel(); return }
             self.receive(connection, buffer: data)
         }
     }
 
-    /// Splits HTTP request into (header lines, body, bodyComplete). Returns nil
-    /// until the header block has fully arrived.
     private static func parseRequest(_ data: Data) -> (headers: [String], body: Data, complete: Bool)? {
         guard let separator = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
-        let headerData = data[..<separator.lowerBound]
-        let headerText = String(decoding: headerData, as: UTF8.self)
+        let headerText = String(decoding: data[..<separator.lowerBound], as: UTF8.self)
         let headers = headerText.components(separatedBy: "\r\n")
         let contentLength = headers
             .first { $0.lowercased().hasPrefix("content-length:") }
@@ -94,13 +102,13 @@ final class DeckMCPServer: @unchecked Sendable {
     }
 
     private func respond(headers: [String], body: Data, on connection: NWConnection) {
-        lock.lock(); let expected = token; let handler = self.handler; lock.unlock()
+        let bearer = Self.bearerToken(in: headers)
+        lock.lock()
+        let session = bearer.flatMap { sessionForToken[$0] }
+        let handler = self.handler
+        lock.unlock()
 
-        let authorized = headers.contains {
-            let line = $0.lowercased()
-            return line.hasPrefix("authorization:") && line.contains("bearer \(expected.lowercased())")
-        }
-        guard authorized else {
+        guard session != nil else {
             sendHTTP(status: "401 Unauthorized", json: nil, on: connection)
             return
         }
@@ -110,10 +118,8 @@ final class DeckMCPServer: @unchecked Sendable {
         }
         let method = request["method"] as? String ?? ""
         let id = request["id"]
-
-        // Notifications (no id) get an empty 202.
         guard id != nil else {
-            sendHTTP(status: "202 Accepted", json: nil, on: connection)
+            sendHTTP(status: "202 Accepted", json: nil, on: connection) // notification
             return
         }
 
@@ -127,13 +133,20 @@ final class DeckMCPServer: @unchecked Sendable {
         case "tools/list":
             reply(id: id, result: ["tools": [Self.deckReplyToolSchema]], on: connection)
         case "tools/call":
-            handleToolCall(request, id: id, handler: handler, on: connection)
+            handleToolCall(request, id: id, session: session ?? "", handler: handler, on: connection)
         default:
             reply(id: id, error: "Method not found: \(method)", code: -32601, on: connection)
         }
     }
 
-    private func handleToolCall(_ request: [String: Any], id: Any?, handler: ToolHandler?, on connection: NWConnection) {
+    private static func bearerToken(in headers: [String]) -> String? {
+        guard let line = headers.first(where: { $0.lowercased().hasPrefix("authorization:") }) else { return nil }
+        let value = line.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard value.lowercased().hasPrefix("bearer ") else { return nil }
+        return String(value.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespaces)
+    }
+
+    private func handleToolCall(_ request: [String: Any], id: Any?, session: String, handler: ReplyHandler?, on connection: NWConnection) {
         let params = request["params"] as? [String: Any]
         let name = params?["name"] as? String ?? ""
         let arguments = params?["arguments"] as? [String: Any] ?? [:]
@@ -147,17 +160,17 @@ final class DeckMCPServer: @unchecked Sendable {
             return
         }
         Task {
-            let text = await handler?(message) ?? "Hermes Deck is not handling replies right now."
+            let text = await handler?(session, message) ?? "Hermes Deck is not handling replies right now."
             self.reply(id: id, result: Self.toolResult(text, isError: false), on: connection)
         }
     }
 
     private static let deckReplyToolSchema: [String: Any] = [
         "name": "deck_reply",
-        "description": "Return your final result to the Hermes Deck teammate who delegated this task to you.",
+        "description": "Return your final result to the Hermes Deck teammate who delegated this task to you. Call this once, when you are done.",
         "inputSchema": [
             "type": "object",
-            "properties": ["message": ["type": "string", "description": "The result to return."]],
+            "properties": ["message": ["type": "string", "description": "The result to return to the requesting agent."]],
             "required": ["message"],
         ],
     ]
@@ -166,7 +179,7 @@ final class DeckMCPServer: @unchecked Sendable {
         ["content": [["type": "text", "text": text]], "isError": isError]
     }
 
-    // MARK: - JSON-RPC replies
+    // MARK: - JSON-RPC
 
     private func reply(id: Any?, result: [String: Any], on connection: NWConnection) {
         sendHTTP(status: "200 OK", json: ["jsonrpc": "2.0", "id": id ?? NSNull(), "result": result], on: connection)
@@ -178,9 +191,7 @@ final class DeckMCPServer: @unchecked Sendable {
 
     private func sendHTTP(status: String, json: [String: Any]?, on connection: NWConnection) {
         var body = Data()
-        if let json {
-            body = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
-        }
+        if let json { body = (try? JSONSerialization.data(withJSONObject: json)) ?? Data() }
         var response = "HTTP/1.1 \(status)\r\n"
         response += "Content-Type: application/json\r\n"
         response += "Content-Length: \(body.count)\r\n"
