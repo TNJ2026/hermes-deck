@@ -225,37 +225,6 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
-    func acpPanelsAlwaysShowComposer() throws {
-        let source = try sourceFile("hermes_deck/Views/Panels/ACPPanelView.swift")
-        let panelBodyStart = try #require(source.range(of: "struct AgentPanelBody: View")?.lowerBound)
-        let panelBodyEnd = try #require(source[panelBodyStart...].range(of: "struct ACPPanelView: View")?.lowerBound)
-        let panelBodySource = String(source[panelBodyStart..<panelBodyEnd])
-
-        // Same composer as the Agents panel, always visible, no attachments,
-        // with the panel's branded welcome above the empty-thread composer.
-        #expect(!panelBodySource.contains("isComposerVisible"))
-        #expect(!panelBodySource.contains(".onHover"))
-        #expect(panelBodySource.contains("usesAgentsComposer: true"))
-        #expect(panelBodySource.contains("composerShowsAttachmentButton: false"))
-        #expect(panelBodySource.contains("emptyStateHeader: AnyView(AgentPanelWelcomeView(sendBackend: sendBackend))"))
-    }
-
-    @Test
-    func acpPanelWelcomeMatchesHermesWelcomeWithAgentIconColors() throws {
-        let source = try sourceFile("hermes_deck/Views/Panels/ACPPanelView.swift")
-
-        #expect(source.contains("struct AgentPanelWelcomeView: View"))
-        #expect(source.contains("ExternalAgentAppearance.color(for: sendBackend)"))
-        #expect(source.contains("Image(iconName)"))
-        #expect(source.contains("Text(\"Start a new conversation\")"))
-        #expect(source.contains("Text(\"Ask a question or describe a task to get started.\")"))
-        #expect(source.contains("case .acp(.codex):"))
-        #expect(source.contains("\"Codex\""))
-        #expect(source.contains("\"Claude\""))
-        #expect(source.contains("\"Gemini\""))
-    }
-
-    @Test
     func openingAgentProfileCreatesProfileThread() {
         let store = ChatStore(agentClient: StubHermesAgentClient(reply: "ok"))
         let profile = HermesProfile(id: "coding", displayName: "Coding")

@@ -41,83 +41,11 @@ struct AgentWorkingDirectoryButton: View {
     }
 }
 
-/// Shared body for the external agent panels: the same inline
-/// `AgentsComposerView` chat the Agents panel uses, minus the attachment
-/// button, with the panel's branded welcome above the empty-thread composer.
-struct AgentPanelBody: View {
-    @Bindable var store: ChatStore
-    let threadID: UUID
-    let sendBackend: AgentBackend
-    @Binding var draft: String
-    @Binding var isFileImporterPresented: Bool
-    let onFileImportRequested: (UUID?) -> Void
-
-    var body: some View {
-        ChatDetailView(
-            store: store,
-            draft: $draft,
-            isFileImporterPresented: $isFileImporterPresented,
-            composerPresentation: .inline,
-            showsComposer: true,
-            messageHorizontalInset: 8,
-            assistantTrailingInset: 12,
-            usesAgentsComposer: true,
-            composerShowsAttachmentButton: false,
-            emptyStateHeader: AnyView(AgentPanelWelcomeView(sendBackend: sendBackend)),
-            threadID: threadID,
-            sendProfile: store.thread(id: threadID)?.profile,
-            sendState: store.sendState(forAgentThreadID: threadID),
-            sendBackend: sendBackend,
-            onFileImportRequested: onFileImportRequested
-        )
-    }
-}
-
-struct AgentPanelWelcomeView: View {
-    let sendBackend: AgentBackend
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(iconName)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 30, height: 30)
-                .foregroundStyle(ExternalAgentAppearance.color(for: sendBackend))
-
-            Text("Start a new conversation")
-                .font(.title2.weight(.semibold))
-
-            Text("Ask a question or describe a task to get started.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-    }
-
-    private var iconName: String {
-        switch sendBackend {
-        case .acp(.codex):
-            "Codex"
-        case .claudeCLI:
-            "Claude"
-        case .agy:
-            "Gemini"
-        case .hermes:
-            "chat"
-        }
-    }
-}
-
 /// Hosts an external ACP agent (Claude Code / Codex) as a chat panel,
 /// reusing ChatDetailView with an `.acp` send backend.
 struct ACPPanelView: View {
     @Bindable var store: ChatStore
     let agent: ACPAgent
-    @Binding var draft: String
-    @Binding var isFileImporterPresented: Bool
-    let onFileImportRequested: (UUID?) -> Void
     @State private var threadID: UUID?
 
     var body: some View {
@@ -159,9 +87,6 @@ struct ACPPanelView: View {
 /// Hosts the local `claude` CLI (stream-json) as the Claude chat panel.
 struct ClaudeCLIPanelView: View {
     @Bindable var store: ChatStore
-    @Binding var draft: String
-    @Binding var isFileImporterPresented: Bool
-    let onFileImportRequested: (UUID?) -> Void
     @State private var threadID: UUID?
 
     var body: some View {
@@ -205,9 +130,6 @@ struct ClaudeCLIPanelView: View {
 /// non-streamed message.
 struct AgyPanelView: View {
     @Bindable var store: ChatStore
-    @Binding var draft: String
-    @Binding var isFileImporterPresented: Bool
-    let onFileImportRequested: (UUID?) -> Void
     @State private var threadID: UUID?
 
     var body: some View {
