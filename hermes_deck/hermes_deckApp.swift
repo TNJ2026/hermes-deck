@@ -58,6 +58,16 @@ private struct ChatWindowRoot: View {
             .task {
                 store.startDeckRoutingIPC()
                 DeckReplyTool.install()
+                // PoC: host the MCP-over-HTTP endpoint and publish where it is.
+                try? DeckMCPServer.shared.start { message in
+                    "Delivered to Hermes Deck: \(message)"
+                }
+                if let url = DeckMCPServer.shared.endpointURL() {
+                    let dir = DeckReplyTool.binDirectory.deletingLastPathComponent()
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let info: [String: String] = ["url": url, "token": DeckMCPServer.shared.token]
+                    try? JSONSerialization.data(withJSONObject: info).write(to: dir.appendingPathComponent("mcp-endpoint.json"))
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 // Kill spawned agent subprocesses (ACP adapter subtrees and the
