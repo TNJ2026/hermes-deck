@@ -39,6 +39,16 @@ struct AgentTerminalView: NSViewRepresentable {
         nsView.themedBackgroundColor = backgroundColor
     }
 
+    /// SwiftTerm's `LocalProcess.deinit` only cancels its exit monitor — it
+    /// neither closes the PTY nor signals the child. Without this the agent
+    /// keeps running every time the view is torn down (panel switch/collapse,
+    /// or the `.id(workingDirectory)` rebuild on a cwd change), orphaning a
+    /// background codex/claude/agy. `terminate()` sends SIGTERM and closes the
+    /// PTY.
+    static func dismantleNSView(_ nsView: ThemedTerminalView, coordinator: Coordinator) {
+        nsView.terminate()
+    }
+
     private func startProcess(in terminal: ThemedTerminalView) {
         // SwiftTerm replaces the child environment with whatever is passed, so
         // start from the agent launch environment (carries the right PATH) and
