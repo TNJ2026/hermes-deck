@@ -27,6 +27,7 @@ struct ChatDetailView: View {
     var sendBackend: AgentBackend = .hermes
     var onFileImportRequested: (UUID?) -> Void = { _ in }
     private let bottomAnchorID = "chat-bottom-anchor"
+    private let handoffStatusID = "chat-handoff-status"
     private let scrollSpace = "chat-scroll-space"
     /// How close (pt) the bottom anchor must be to the viewport bottom for the
     /// view to count as "following" and keep auto-scrolling.
@@ -70,6 +71,7 @@ struct ChatDetailView: View {
                                     if let batch = store.threadHandoffs[thread.id],
                                        batch.anchorMessageID == message.id {
                                         AgentHandoffStatusView(items: batch.items)
+                                            .id(handoffStatusID)
                                     }
                                 }
                                 if showsThinkingIndicator {
@@ -511,6 +513,14 @@ struct ChatDetailView: View {
     private var bottomScrollTargetID: AnyHashable {
         if showsThinkingIndicator { return "thinking-indicator" }
         if let thread = displayedThread, let last = visibleMessages(in: thread).last {
+            // A hand-off status card anchored to the last visible message
+            // renders below it, so target the card — otherwise its replies
+            // grow off-screen with the message bottom pinned to the viewport.
+            if let batch = store.threadHandoffs[thread.id],
+               !batch.items.isEmpty,
+               batch.anchorMessageID == last.id {
+                return handoffStatusID
+            }
             return last.id
         }
         return bottomAnchorID
@@ -552,8 +562,12 @@ struct ChatDetailView: View {
     /// Excludes message count (a new message is handled by its own animated
     /// scroll) so streaming never triggers the animated path.
     private func streamingTrigger(for thread: ChatThread) -> ChatScrollTrigger {
+        // Hand-off status cards stream their replies without changing the
+        // message list, so fold their items in — otherwise the card grows
+        // below the last message with no trigger to follow it.
+        let handoffItems = store.threadHandoffs[thread.id]?.items ?? []
         guard let lastMessage = thread.messages.last else {
-            return ChatScrollTrigger(threadID: thread.id)
+            return ChatScrollTrigger(threadID: thread.id, handoffItems: handoffItems)
         }
 
         return ChatScrollTrigger(
@@ -562,7 +576,8 @@ struct ChatDetailView: View {
             content: lastMessage.content,
             segments: lastMessage.segments,
             reasoningText: lastMessage.reasoningText,
-            attachmentCount: lastMessage.attachments.count
+            attachmentCount: lastMessage.attachments.count,
+            handoffItems: handoffItems
         )
     }
 }
@@ -584,6 +599,7 @@ struct ChatScrollTrigger: Equatable {
     var segments: [AssistantSegment] = []
     var reasoningText: String = ""
     var attachmentCount: Int = 0
+    var handoffItems: [AgentHandoffItem] = []
 }
 
 enum ComposerPresentation {
