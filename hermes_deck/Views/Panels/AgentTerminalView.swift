@@ -1,18 +1,19 @@
 import SwiftUI
 import AppKit
+import Combine
 import SwiftTerm
 
 /// Embeds an interactive agent CLI (claude / codex / agy) in a panel using a
-/// real terminal emulator. `LocalProcessTerminalView` owns the PTY, parses the
-/// full VT/xterm stream (alt-screen, cursor moves, colors) and routes keyboard,
-/// scroll and resize straight to the child — everything a TUI needs that an
-/// append-to-`Text` view cannot do.
-///
-/// The panel recreates this view (via `.id(workingDirectory)`) when the cwd
-/// changes, which relaunches the process in the new directory.
+/// real terminal emulator whose process lifetime is tied to the **app**, not to
+/// this view. Showing, hiding, or switching the right-hand panels detaches and
+/// reattaches the same terminal — the agent keeps running. The process is only
+/// terminated when its working directory changes (an explicit relaunch), when
+/// the user restarts it after it exits, or when the app quits.
 struct AgentTerminalView: View {
-    /// argv for the agent, e.g. `["claude"]` — run through `/usr/bin/env` so
-    /// it resolves against the launch PATH.
+    /// Stable per-panel identity (the panel's thread id); the session key.
+    let sessionID: UUID
+    /// argv for the agent, e.g. `["claude"]` — run through `/usr/bin/env` so it
+    /// resolves against the launch PATH.
     let command: [String]
     let workingDirectory: URL
     /// The terminal's base background (the view fill and the default cell
@@ -22,37 +23,49 @@ struct AgentTerminalView: View {
     /// the standard text size so it matches the rest of the app.
     var font: NSFont = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
 
-    /// Bumping this recreates the terminal host, relaunching the process —
-    /// used by the restart affordance after the agent exits.
-    @State private var runID = UUID()
-    /// Non-nil once the child process has exited; drives the restart banner.
-    @State private var processExit: ProcessExit?
-    /// The agent's reported working directory (OSC 7), shown when it diverges
-    /// from the launch directory. Most agents never emit it, so it stays hidden.
-    @State private var reportedDirectory: String?
+    @State private var session: TerminalSession?
 
     var body: some View {
-        TerminalHost(
-            command: command,
-            workingDirectory: workingDirectory,
-            backgroundColor: backgroundColor,
-            font: font,
-            onExit: { code in
-                withAnimation(.snappy) { processExit = ProcessExit(code: code) }
-            },
-            onWorkingDirectoryChange: { dir in
-                reportedDirectory = (dir == workingDirectory.path) ? nil : dir
+        Group {
+            if let session {
+                AgentTerminalContent(session: session, backgroundColor: backgroundColor, font: font)
+            } else {
+                Color(nsColor: backgroundColor)
             }
-        )
-        .id(runID)
-        .overlay(alignment: .top) { directoryFooter }
-        .overlay(alignment: .bottom) { exitBanner }
+        }
+        // Resolve the session in a task, not in `body`: the store's
+        // get-or-launch may relaunch on a directory change, which must not run
+        // inside the view-update pass. Re-runs when the directory changes.
+        .task(id: workingDirectory) {
+            session = AgentTerminalSessionStore.shared.session(
+                id: sessionID,
+                command: command,
+                workingDirectory: workingDirectory,
+                backgroundColor: backgroundColor,
+                font: font
+            )
+        }
+    }
+}
+
+private struct AgentTerminalContent: View {
+    @ObservedObject var session: TerminalSession
+    let backgroundColor: NSColor
+    let font: NSFont
+
+    var body: some View {
+        TerminalSurface(view: session.view, backgroundColor: backgroundColor, font: font)
+            // A relaunch swaps in a fresh terminal view; the changing generation
+            // makes SwiftUI re-vend it.
+            .id(session.generation)
+            .overlay(alignment: .top) { directoryFooter }
+            .overlay(alignment: .bottom) { exitBanner }
     }
 
     @ViewBuilder
     private var directoryFooter: some View {
-        if let reportedDirectory {
-            Text(reportedDirectory)
+        if let dir = session.reportedDirectory {
+            Text(dir)
                 .font(.caption.monospaced())
                 .lineLimit(1)
                 .truncationMode(.head)
@@ -68,17 +81,19 @@ struct AgentTerminalView: View {
 
     @ViewBuilder
     private var exitBanner: some View {
-        if let processExit {
+        if let exit = session.exit {
             HStack(spacing: 12) {
                 Image(systemName: "stop.circle")
                     .foregroundStyle(.secondary)
-                Text(processExit.message)
+                Text(exit.message)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Button("Restart", action: restart)
-                    .keyboardShortcut(.return, modifiers: [])
-                    .controlSize(.small)
+                Button("Restart") {
+                    withAnimation(.snappy) { session.relaunch() }
+                }
+                .keyboardShortcut(.return, modifiers: [])
+                .controlSize(.small)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -88,15 +103,111 @@ struct AgentTerminalView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
+}
 
-    private func restart() {
-        withAnimation(.snappy) {
-            processExit = nil
-            reportedDirectory = nil
+/// Vends a persistent, externally-owned terminal view into SwiftUI without
+/// taking ownership: it never launches or terminates the process. The owning
+/// `TerminalSession` (held by `AgentTerminalSessionStore`) outlives mount and
+/// unmount, so hiding and reshowing the panel keeps the agent running. There is
+/// deliberately no `dismantleNSView` — teardown must not terminate.
+private struct TerminalSurface: NSViewRepresentable {
+    let view: ThemedTerminalView
+    let backgroundColor: NSColor
+    let font: NSFont
+
+    func makeNSView(context: Context) -> ThemedTerminalView {
+        apply(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: ThemedTerminalView, context: Context) {
+        apply(to: nsView)
+    }
+
+    private func apply(to terminal: ThemedTerminalView) {
+        terminal.themedBackgroundColor = backgroundColor
+        if terminal.font != font { terminal.font = font }
+    }
+}
+
+/// Owns one agent terminal for the lifetime of the app: the running process,
+/// its view, and the exit / working-directory state the panel observes. Held by
+/// `AgentTerminalSessionStore` so it survives the panel being hidden or
+/// switched away.
+final class TerminalSession: ObservableObject {
+    let id: UUID
+    let command: [String]
+    private(set) var workingDirectory: URL
+    private let backgroundColor: NSColor
+    private let font: NSFont
+
+    /// The live terminal view. Replaced (and the old one terminated) on a
+    /// relaunch; `generation` then tells the surface to re-vend it.
+    @Published private(set) var view: ThemedTerminalView
+    /// Non-nil once the child process has exited; drives the restart banner.
+    @Published var exit: ProcessExit?
+    /// The agent's reported working directory (OSC 7), shown when it diverges
+    /// from the launch directory. Most agents never emit it, so it stays hidden.
+    @Published var reportedDirectory: String?
+    @Published private(set) var generation = 0
+
+    private let delegate = SessionDelegate()
+
+    init(id: UUID, command: [String], workingDirectory: URL, backgroundColor: NSColor, font: NSFont) {
+        self.id = id
+        self.command = command
+        self.workingDirectory = workingDirectory
+        self.backgroundColor = backgroundColor
+        self.font = font
+        self.view = ThemedTerminalView(frame: .zero)
+        delegate.owner = self
+        launch()
+    }
+
+    private func launch() {
+        view.processDelegate = delegate
+        view.themedBackgroundColor = backgroundColor
+        view.font = font
+
+        // SwiftTerm replaces the child environment with whatever is passed, so
+        // start from the agent launch environment (carries the right PATH) and
+        // layer on the terminal hints it would otherwise have supplied.
+        var environment = AgentLaunchEnvironment.make()
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
+        if environment["LANG"] == nil {
+            environment["LANG"] = "en_US.UTF-8"
         }
-        // A fresh id tears down the dead host and builds a new one, relaunching
-        // the agent in the same working directory.
-        runID = UUID()
+        view.startProcess(
+            executable: "/usr/bin/env",
+            args: command,
+            environment: environment.map { "\($0.key)=\($0.value)" },
+            currentDirectory: workingDirectory.path
+        )
+    }
+
+    /// Terminates the current process and starts a fresh one — used by the
+    /// Restart affordance and on a working-directory change.
+    func relaunch(workingDirectory newDirectory: URL? = nil) {
+        view.terminate()
+        if let newDirectory { workingDirectory = newDirectory }
+        exit = nil
+        reportedDirectory = nil
+        view = ThemedTerminalView(frame: .zero)
+        launch()
+        generation += 1
+    }
+
+    func terminate() {
+        view.terminate()
+    }
+
+    fileprivate func handleExit(_ code: Int32?) {
+        exit = ProcessExit(code: code)
+    }
+
+    fileprivate func handleCurrentDirectory(_ directory: String) {
+        reportedDirectory = (directory == workingDirectory.path) ? nil : directory
     }
 
     struct ProcessExit: Equatable {
@@ -108,87 +219,76 @@ struct AgentTerminalView: View {
     }
 }
 
-/// Bridges SwiftTerm's `LocalProcessTerminalView` into SwiftUI: launches the
-/// agent, reports exit/cwd back through callbacks, and terminates the child on
-/// teardown.
-private struct TerminalHost: NSViewRepresentable {
-    let command: [String]
-    let workingDirectory: URL
-    var backgroundColor: NSColor
-    var font: NSFont
-    var onExit: (Int32?) -> Void
-    var onWorkingDirectoryChange: (String) -> Void
+/// SwiftTerm's delegate is delivered off the main actor, so this lightweight
+/// `NSObject` receives the callbacks and hops back to the session on main.
+private final class SessionDelegate: NSObject, LocalProcessTerminalViewDelegate {
+    weak var owner: TerminalSession?
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onExit: onExit, onCwd: onWorkingDirectoryChange)
+    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        guard let directory else { return }
+        let owner = owner
+        DispatchQueue.main.async { owner?.handleCurrentDirectory(directory) }
     }
 
-    func makeNSView(context: Context) -> ThemedTerminalView {
-        let terminal = ThemedTerminalView(frame: .zero)
-        terminal.processDelegate = context.coordinator
-        terminal.themedBackgroundColor = backgroundColor
-        terminal.font = font
-        startProcess(in: terminal)
-        return terminal
+    func processTerminated(source: TerminalView, exitCode: Int32?) {
+        let owner = owner
+        DispatchQueue.main.async { owner?.handleExit(exitCode) }
     }
+}
 
-    func updateNSView(_ nsView: ThemedTerminalView, context: Context) {
-        // Keep the callbacks fresh (they capture per-render closures).
-        context.coordinator.onExit = onExit
-        context.coordinator.onCwd = onWorkingDirectoryChange
-        nsView.themedBackgroundColor = backgroundColor
-        if nsView.font != font { nsView.font = font }
-    }
+/// Process-lifetime owner for the agent terminals: keyed by panel thread id and
+/// held for the whole app run. Sessions are launched lazily on first request,
+/// reused across panel show/hide/switch, relaunched when the working directory
+/// changes, and all terminated when the app quits.
+@MainActor
+final class AgentTerminalSessionStore {
+    static let shared = AgentTerminalSessionStore()
 
-    /// SwiftTerm's `LocalProcess.deinit` only cancels its exit monitor; it
-    /// neither signals the child nor closes the PTY. Without this the agent
-    /// keeps running on every panel switch/collapse or `.id` rebuild,
-    /// orphaning a background codex/claude/agy. `terminate()` sends SIGTERM
-    /// and closes the PTY.
-    static func dismantleNSView(_ nsView: ThemedTerminalView, coordinator: Coordinator) {
-        nsView.terminate()
-    }
+    private var sessions: [UUID: TerminalSession] = [:]
 
-    private func startProcess(in terminal: ThemedTerminalView) {
-        // SwiftTerm replaces the child environment with whatever is passed, so
-        // start from the agent launch environment (carries the right PATH) and
-        // layer on the terminal hints it would otherwise have supplied.
-        var environment = AgentLaunchEnvironment.make()
-        environment["TERM"] = "xterm-256color"
-        environment["COLORTERM"] = "truecolor"
-        if environment["LANG"] == nil {
-            environment["LANG"] = "en_US.UTF-8"
+    private init() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                AgentTerminalSessionStore.shared.terminateAll()
+            }
         }
-        let environmentList = environment.map { "\($0.key)=\($0.value)" }
+    }
 
-        terminal.startProcess(
-            executable: "/usr/bin/env",
-            args: command,
-            environment: environmentList,
-            currentDirectory: workingDirectory.path
+    func session(
+        id: UUID,
+        command: [String],
+        workingDirectory: URL,
+        backgroundColor: NSColor,
+        font: NSFont
+    ) -> TerminalSession {
+        if let existing = sessions[id] {
+            // An explicit directory change relaunches the agent there.
+            if existing.workingDirectory.path != workingDirectory.path {
+                existing.relaunch(workingDirectory: workingDirectory)
+            }
+            return existing
+        }
+        let session = TerminalSession(
+            id: id,
+            command: command,
+            workingDirectory: workingDirectory,
+            backgroundColor: backgroundColor,
+            font: font
         )
+        sessions[id] = session
+        return session
     }
 
-    final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
-        var onExit: (Int32?) -> Void
-        var onCwd: (String) -> Void
-
-        init(onExit: @escaping (Int32?) -> Void, onCwd: @escaping (String) -> Void) {
-            self.onExit = onExit
-            self.onCwd = onCwd
-        }
-
-        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-            guard let directory else { return }
-            DispatchQueue.main.async { self.onCwd(directory) }
-        }
-
-        func processTerminated(source: TerminalView, exitCode: Int32?) {
-            DispatchQueue.main.async { self.onExit(exitCode) }
-        }
+    func terminateAll() {
+        sessions.values.forEach { $0.terminate() }
+        sessions.removeAll()
     }
 }
 

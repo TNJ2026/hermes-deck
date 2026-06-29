@@ -69,10 +69,10 @@ struct ACPPanelView: View {
 
             if let threadID {
                 AgentTerminalView(
+                    sessionID: threadID,
                     command: [agent == .codex ? "codex" : agent.rawValue],
                     workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
-                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }
@@ -110,10 +110,10 @@ struct ClaudeCLIPanelView: View {
 
             if let threadID {
                 AgentTerminalView(
+                    sessionID: threadID,
                     command: ["claude"],
                     workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
-                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }
@@ -153,10 +153,10 @@ struct AgyPanelView: View {
 
             if let threadID {
                 AgentTerminalView(
+                    sessionID: threadID,
                     command: ["agy"],
                     workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
-                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }
