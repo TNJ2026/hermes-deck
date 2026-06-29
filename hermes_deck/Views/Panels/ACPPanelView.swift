@@ -140,14 +140,11 @@ struct ACPPanelView: View {
             Divider()
 
             if let threadID {
-                AgentPanelBody(
-                    store: store,
-                    threadID: threadID,
-                    sendBackend: .acp(agent),
-                    draft: $draft,
-                    isFileImporterPresented: $isFileImporterPresented,
-                    onFileImportRequested: onFileImportRequested
+                AgentTerminalView(
+                    command: [agent == .codex ? "codex" : agent.rawValue],
+                    workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
+                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }
@@ -188,14 +185,11 @@ struct ClaudeCLIPanelView: View {
             Divider()
 
             if let threadID {
-                AgentPanelBody(
-                    store: store,
-                    threadID: threadID,
-                    sendBackend: .claudeCLI,
-                    draft: $draft,
-                    isFileImporterPresented: $isFileImporterPresented,
-                    onFileImportRequested: onFileImportRequested
+                AgentTerminalView(
+                    command: ["claude"],
+                    workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
+                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }
@@ -237,14 +231,11 @@ struct AgyPanelView: View {
             Divider()
 
             if let threadID {
-                AgentPanelBody(
-                    store: store,
-                    threadID: threadID,
-                    sendBackend: .agy,
-                    draft: $draft,
-                    isFileImporterPresented: $isFileImporterPresented,
-                    onFileImportRequested: onFileImportRequested
+                AgentTerminalView(
+                    command: ["agy"],
+                    workingDirectory: store.agentWorkingDirectory(for: threadID)
                 )
+                .id(store.agentWorkingDirectory(for: threadID))
             } else {
                 Spacer(minLength: 0)
             }

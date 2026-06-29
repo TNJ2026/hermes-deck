@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		FA00000000000000000000A3 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000A2 /* Yams */; };
+		FA00000000000000000000B3 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000B2 /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				FA00000000000000000000A3 /* Yams in Frameworks */,
+				FA00000000000000000000B3 /* SwiftTerm in Frameworks */,
 			);
 		};
 		EC2CBA982FD7F4D400EDF767 /* Frameworks */ = {
@@ -110,6 +112,7 @@
 			name = hermes_deck;
 			packageProductDependencies = (
 				FA00000000000000000000A2 /* Yams */,
+				FA00000000000000000000B2 /* SwiftTerm */,
 			);
 			productName = hermes_deck;
 			productReference = EC2CBA8C2FD7F4D300EDF767 /* hermes_deck.app */;
@@ -191,6 +194,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FA00000000000000000000A1 /* XCRemoteSwiftPackageReference "Yams" */,
+				FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EC2CBA8D2FD7F4D300EDF767 /* Products */;
@@ -562,6 +566,14 @@
 				minimumVersion = 6.0.0;
 			};
 		};
+		FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.13.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -569,6 +581,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FA00000000000000000000A1 /* XCRemoteSwiftPackageReference "Yams" */;
 			productName = Yams;
+		};
+		FA00000000000000000000B2 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
