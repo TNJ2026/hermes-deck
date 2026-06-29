@@ -85,6 +85,8 @@ extension ChatStore {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "No pending delegation is bound to this panel session")
         }
         panelReplyBindings[session] = nil
+        panelReplyTimeouts[session]?.cancel()
+        panelReplyTimeouts[session] = nil
 
         setHandoffPhase(.replied(message), itemID: binding.handoffItemID, in: binding.sourceThreadID)
         Task { @MainActor [self] in
@@ -97,12 +99,28 @@ extension ChatStore {
     /// Records who delegated into a panel so its `deck-reply` can close the loop
     /// back to them. Keyed by the panel's thread id (its session key).
     func recordPanelReplyBinding(panelThreadID: UUID, sourceThreadID: UUID, sourceProfile: HermesProfile, handoffItemID: UUID, targetName: String) {
-        panelReplyBindings[panelThreadID.uuidString] = PanelReplyBinding(
+        let key = panelThreadID.uuidString
+        panelReplyBindings[key] = PanelReplyBinding(
             sourceThreadID: sourceThreadID,
             sourceProfile: sourceProfile,
             handoffItemID: handoffItemID,
             targetName: targetName
         )
+        // Fail the hand-off if the panel never returns a result.
+        panelReplyTimeouts[key]?.cancel()
+        let timeout = panelReplyTimeout
+        panelReplyTimeouts[key] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled else { return }
+            self?.expirePanelReplyBinding(key)
+        }
+    }
+
+    private func expirePanelReplyBinding(_ key: String) {
+        panelReplyTimeouts[key] = nil
+        guard let binding = panelReplyBindings[key] else { return }
+        panelReplyBindings[key] = nil
+        setHandoffPhase(.failed, itemID: binding.handoffItemID, in: binding.sourceThreadID)
     }
 
     private func deckRoutingSourceThread(for request: DeckRoutingIPCRequest, sessionKey: String) -> ChatThread? {

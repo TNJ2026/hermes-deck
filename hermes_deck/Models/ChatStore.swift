@@ -88,6 +88,12 @@ final class ChatStore {
     /// Who delegated into each CLI panel, so the panel's `deck-reply` can close
     /// the loop back to them. Keyed by the panel's thread id.
     @ObservationIgnored var panelReplyBindings: [String: PanelReplyBinding] = [:]
+    /// Pending timeout per binding; cancelled when the reply lands.
+    @ObservationIgnored var panelReplyTimeouts: [String: Task<Void, Never>] = [:]
+    /// How long to wait for a panel CLI's `deck-reply` before failing the
+    /// hand-off (an agent that ignores the convention, or exits, would otherwise
+    /// leave it waiting forever).
+    @ObservationIgnored var panelReplyTimeout: Duration = .seconds(600)
 
     var selectedThread: ChatThread? {
         get {

@@ -623,6 +623,43 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func panelDelegationTimesOutWhenNoReply() async throws {
+        let source = ChatThread(title: "Researcher", profile: HermesProfile(id: "researcher", displayName: "Researcher"))
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: ""), threads: [source])
+        store.panelReplyTimeout = .milliseconds(50)
+        let panelThreadID = UUID()
+        let itemID = UUID()
+        store.threadHandoffs[source.id] = AgentHandoffBatch(
+            anchorMessageID: nil,
+            items: [AgentHandoffItem(id: itemID, targetName: "Codex", phase: .waiting)]
+        )
+        store.recordPanelReplyBinding(
+            panelThreadID: panelThreadID,
+            sourceThreadID: source.id,
+            sourceProfile: source.profile,
+            handoffItemID: itemID,
+            targetName: "Codex"
+        )
+
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(store.threadHandoffs[source.id]?.items.first?.phase == .failed)
+
+        // A reply arriving after the timeout finds nothing pending.
+        let request = DeckRoutingIPCRequest(
+            token: "",
+            type: "reply",
+            target: nil,
+            prompt: nil,
+            wait: nil,
+            sourceSessionKey: nil,
+            sourceProfileID: nil,
+            session: panelThreadID.uuidString,
+            messageB64: Data("late".utf8).base64EncodedString()
+        )
+        #expect(!store.handleDeckRoutingIPCRequest(request).ok)
+    }
+
+    @Test
     func agentPanelReplyMentioningDefaultRoutesToMainHermesAgent() async throws {
         // `@default` (the main Hermes agent) is addressable from an agent's
         // reply: the segment routes into the main chat thread and the reply is
