@@ -111,4 +111,47 @@ extension ChatStore {
         let profile = thread(id: threadID)?.profile ?? HermesProfile(id: "claude-cli", displayName: "Claude Code")
         await send(rawText, in: threadID, profile: profile)
     }
+
+    func sendPromptToExternalAgentPanel(_ prompt: String, backend: AgentBackend, threadID: UUID) async -> Bool {
+        if let externalAgentPanelPromptSender {
+            return await externalAgentPanelPromptSender(backend, threadID, prompt)
+        }
+        guard let command = terminalCommand(for: backend), let executable = command.first else { return false }
+        // The panel runs the CLI directly, so gate on *that* binary being on the
+        // launch PATH — not the headless ACP probe (e.g. `npx`), which checks a
+        // different launcher and would let a routed prompt vanish into a
+        // terminal that immediately dies.
+        guard Self.isExecutableAvailable(executable, environment: AgentLaunchEnvironment.make()) else { return false }
+        return AgentTerminalSessionStore.shared.submitPrompt(
+            prompt,
+            id: threadID,
+            command: command,
+            workingDirectory: agentWorkingDirectory(for: threadID)
+        )
+    }
+
+    /// Whether `name` resolves to an executable on the given PATH. Pure
+    /// filesystem, so it is safe to call off the main actor.
+    nonisolated static func isExecutableAvailable(_ name: String, environment: [String: String]) -> Bool {
+        if name.contains("/") {
+            return FileManager.default.isExecutableFile(atPath: name)
+        }
+        let path = environment["PATH"] ?? ""
+        return path.split(separator: ":").contains {
+            FileManager.default.isExecutableFile(atPath: "\($0)/\(name)")
+        }
+    }
+
+    private func terminalCommand(for backend: AgentBackend) -> [String]? {
+        switch backend {
+        case .acp(let agent):
+            [agent == .codex ? "codex" : agent.rawValue]
+        case .claudeCLI:
+            ["claude"]
+        case .agy:
+            ["agy"]
+        case .hermes:
+            nil
+        }
+    }
 }

@@ -152,6 +152,13 @@ final class TerminalSession: ObservableObject {
     @Published private(set) var generation = 0
 
     private let delegate = SessionDelegate()
+    /// Prompts routed in before the freshly-launched CLI is ready to accept
+    /// input; flushed once its boot output settles so nothing is typed into a
+    /// half-drawn TUI and lost.
+    private var pendingPrompts: [String] = []
+    private var isReadyForInput = false
+    private var readinessSettle: DispatchWorkItem?
+    private var readinessDeadline: DispatchWorkItem?
 
     init(id: UUID, command: [String], workingDirectory: URL, backgroundColor: NSColor, font: NSFont) {
         self.id = id
@@ -165,7 +172,15 @@ final class TerminalSession: ObservableObject {
     }
 
     private func launch() {
+        isReadyForInput = false
+        pendingPrompts.removeAll()
+        readinessSettle?.cancel(); readinessSettle = nil
+        readinessDeadline?.cancel(); readinessDeadline = nil
+
         view.processDelegate = delegate
+        view.onOutput = { [weak self] in
+            DispatchQueue.main.async { self?.noteOutput() }
+        }
         view.themedBackgroundColor = backgroundColor
         view.font = font
 
@@ -184,6 +199,31 @@ final class TerminalSession: ObservableObject {
             environment: environment.map { "\($0.key)=\($0.value)" },
             currentDirectory: workingDirectory.path
         )
+
+        // Fallback: flush queued prompts even if a chatty TUI never goes quiet.
+        let deadline = DispatchWorkItem { [weak self] in self?.markReadyForInput() }
+        readinessDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: deadline)
+    }
+
+    /// Each burst of child output resets a short settle timer; when the boot
+    /// output quiesces the input box is up, so queued prompts can be sent.
+    private func noteOutput() {
+        guard !isReadyForInput else { return }
+        readinessSettle?.cancel()
+        let settle = DispatchWorkItem { [weak self] in self?.markReadyForInput() }
+        readinessSettle = settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: settle)
+    }
+
+    private func markReadyForInput() {
+        guard !isReadyForInput else { return }
+        isReadyForInput = true
+        readinessSettle?.cancel(); readinessSettle = nil
+        readinessDeadline?.cancel(); readinessDeadline = nil
+        let queued = pendingPrompts
+        pendingPrompts.removeAll()
+        queued.forEach(write)
     }
 
     /// Terminates the current process and starts a fresh one — used by the
@@ -200,6 +240,35 @@ final class TerminalSession: ObservableObject {
 
     func terminate() {
         view.terminate()
+    }
+
+    /// Injects a routed prompt into the interactive agent. Sent immediately once
+    /// the CLI is accepting input, otherwise queued and flushed when its boot
+    /// output settles — so a prompt routed into a just-launched (or hidden,
+    /// not-yet-opened) panel isn't typed into a half-drawn TUI and dropped.
+    func submitPrompt(_ prompt: String) -> Bool {
+        guard exit == nil else { return false }
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        if isReadyForInput {
+            write(text)
+        } else {
+            pendingPrompts.append(text)
+        }
+        return true
+    }
+
+    /// Writes one prompt to the PTY as a paste + submit, mirroring a user
+    /// pasting text so multiline prompts stay together under bracketed paste.
+    private func write(_ text: String) {
+        if view.terminal.bracketedPasteMode {
+            view.send(data: EscapeSequences.bracketedPasteStart[0...])
+        }
+        view.send(txt: text)
+        if view.terminal.bracketedPasteMode {
+            view.send(data: EscapeSequences.bracketedPasteEnd[0...])
+        }
+        view.send(txt: "\r")
     }
 
     fileprivate func handleExit(_ code: Int32?) {
@@ -298,6 +367,23 @@ final class AgentTerminalSessionStore {
         sessions.values.forEach { $0.terminate() }
         sessions.removeAll()
     }
+
+    func submitPrompt(
+        _ prompt: String,
+        id: UUID,
+        command: [String],
+        workingDirectory: URL,
+        backgroundColor: NSColor = .textBackgroundColor,
+        font: NSFont = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    ) -> Bool {
+        session(
+            id: id,
+            command: command,
+            workingDirectory: workingDirectory,
+            backgroundColor: backgroundColor,
+            font: font
+        ).submitPrompt(prompt)
+    }
 }
 
 /// `LocalProcessTerminalView` resolves a dynamic `NSColor` to a fixed RGB the
@@ -310,6 +396,14 @@ final class AgentTerminalSessionStore {
 final class ThemedTerminalView: LocalProcessTerminalView {
     var themedBackgroundColor: NSColor = .textBackgroundColor {
         didSet { applyThemedColors() }
+    }
+    /// Fired on every chunk of child output (off the main actor); the session
+    /// uses it to tell when a freshly-launched CLI is ready for injected input.
+    var onOutput: (() -> Void)?
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        super.dataReceived(slice: slice)
+        onOutput?()
     }
 
     override func viewDidChangeEffectiveAppearance() {

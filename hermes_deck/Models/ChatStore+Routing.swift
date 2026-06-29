@@ -260,7 +260,7 @@ extension ChatStore {
         await refreshExternalAgentAvailability()
         var skippedNames: [String] = []
         let routes = selfFiltered.filter { route in
-            guard route.isExternal, isExternalAgentUnavailable(route.target.profile.id) else { return true }
+            guard route.isExternal, !closesLoopToSource, isExternalAgentUnavailable(route.target.profile.id) else { return true }
             skippedNames.append(route.target.profile.displayName)
             return false
         }
@@ -323,12 +323,23 @@ extension ChatStore {
                 let message = route.message
                 let profile = route.target.profile
                 let isExternal = route.isExternal
+                let backend = route.target.backend
                 group.addTask { @MainActor [self] in
                     // Stagger external agents' first launch: booting several
                     // npx/node/CLI adapters at once spikes CPU/IO and janks the
                     // UI. A short offset spreads the cold-start cost.
                     if isExternal, offset > 0 {
                         try? await Task.sleep(for: .milliseconds(offset * 300))
+                    }
+                    if isExternal, closesLoopToSource {
+                        let sent = await sendPromptToExternalAgentPanel(message, backend: backend, threadID: agentThreadID)
+                        let panelMessage = "Prompt sent to \(profile.displayName) panel."
+                        if sent {
+                            setHandoffPhase(.replied(panelMessage), itemID: handoffItemID, in: sourceThreadID)
+                            return (name: profile.displayName, reply: panelMessage)
+                        }
+                        setHandoffPhase(.failed, itemID: handoffItemID, in: sourceThreadID)
+                        return nil
                     }
                     let routedResult = await send(
                         message,

@@ -84,6 +84,7 @@ final class ChatStore {
     /// greyed-out state in mention autocomplete; refreshed off the main actor.
     var unavailableExternalAgentProfileIDs: Set<String> = []
     var sessionSearchQuery = ""
+    @ObservationIgnored var externalAgentPanelPromptSender: ((AgentBackend, UUID, String) async -> Bool)?
 
     var selectedThread: ChatThread? {
         get {
@@ -146,7 +147,8 @@ final class ChatStore {
         kanbanProvider: (any HermesKanbanProvider)? = nil,
         gatewayProvider: (any HermesGatewayProvider)? = nil,
         sessionPageSize: Int = 100,
-        threads: [ChatThread] = []
+        threads: [ChatThread] = [],
+        externalAgentPanelPromptSender: ((AgentBackend, UUID, String) async -> Bool)? = nil
     ) {
         // Providers are constructed here (in this @MainActor init body) rather
         // than as default arguments: the actor-backed providers are main-actor
@@ -162,6 +164,7 @@ final class ChatStore {
         self.kanbanProvider = kanbanProvider ?? LocalHermesKanbanProvider()
         self.gatewayProvider = gatewayProvider ?? LocalHermesGatewayProvider()
         self.sessionPageSize = max(1, sessionPageSize)
+        self.externalAgentPanelPromptSender = externalAgentPanelPromptSender
         self.selectedProfile = .defaultProfile
         self.availableProfiles = HermesProfile.presets
         self.threads = threads.isEmpty ? [ChatThread(title: "New Chat")] : threads

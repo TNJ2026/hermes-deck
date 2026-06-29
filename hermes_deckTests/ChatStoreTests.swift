@@ -518,6 +518,64 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func agentReplyForwardsExternalMentionToAgentPanelTerminal() async throws {
+        struct PanelPrompt: Equatable {
+            let backend: AgentBackend
+            let threadID: UUID
+            let prompt: String
+        }
+
+        var panelPrompts: [PanelPrompt] = []
+        let defaultThread = ChatThread(title: "Main", profile: .defaultProfile)
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: "```AgentRouting\n@codex inspect repo\n```"),
+            threads: [defaultThread],
+            externalAgentPanelPromptSender: { backend, threadID, prompt in
+                panelPrompts.append(PanelPrompt(backend: backend, threadID: threadID, prompt: prompt))
+                return true
+            }
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            HermesProfile(id: "researcher", displayName: "Researcher"),
+        ]
+        let researcher = HermesProfile(id: "researcher", displayName: "Researcher")
+        let researcherThreadID = store.threadIDForAgentProfile(researcher)
+
+        await store.sendAgentProfile("dig in", in: researcherThreadID, profile: researcher)
+
+        let codexThread = try #require(store.threads.first { $0.profile.id == "acp:codex" })
+        #expect(panelPrompts == [
+            PanelPrompt(backend: .acp(.codex), threadID: codexThread.id, prompt: "inspect repo")
+        ])
+        #expect(store.threadBackends[codexThread.id] == .acp(.codex))
+        #expect(store.threadHandoffs[researcherThreadID]?.items.first?.phase == .replied("Prompt sent to Codex panel."))
+
+        let researcherMsgs = try #require(store.thread(id: researcherThreadID)?.messages)
+        #expect(researcherMsgs.contains {
+            $0.role == .user
+                && $0.isAgentReplyFollowUp == true
+                && $0.content == "Codex replied:\n\nPrompt sent to Codex panel."
+        })
+    }
+
+    @Test
+    func externalPanelForwardingResolvesExecutableOnPath() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tool = dir.appendingPathComponent("toolx")
+        FileManager.default.createFile(atPath: tool.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+
+        let env = ["PATH": dir.path]
+        #expect(ChatStore.isExecutableAvailable("toolx", environment: env))
+        #expect(!ChatStore.isExecutableAvailable("missing-tool", environment: env))
+        // No PATH → nothing resolves; an absolute path is checked directly.
+        #expect(!ChatStore.isExecutableAvailable("toolx", environment: [:]))
+        #expect(ChatStore.isExecutableAvailable(tool.path, environment: [:]))
+    }
+
+    @Test
     func agentPanelReplyMentioningDefaultRoutesToMainHermesAgent() async throws {
         // `@default` (the main Hermes agent) is addressable from an agent's
         // reply: the segment routes into the main chat thread and the reply is
