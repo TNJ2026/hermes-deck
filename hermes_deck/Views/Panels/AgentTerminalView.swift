@@ -12,6 +12,8 @@ import SwiftTerm
 struct AgentTerminalView: View {
     /// Stable per-panel identity (the panel's thread id); the session key.
     let sessionID: UUID
+    /// Which CLI backend this panel hosts — drives its MCP wiring.
+    let backend: AgentBackend
     /// argv for the agent, e.g. `["claude"]` — run through `/usr/bin/env` so it
     /// resolves against the launch PATH.
     let command: [String]
@@ -39,6 +41,7 @@ struct AgentTerminalView: View {
         .task(id: workingDirectory) {
             session = AgentTerminalSessionStore.shared.session(
                 id: sessionID,
+                backend: backend,
                 command: command,
                 workingDirectory: workingDirectory,
                 backgroundColor: backgroundColor,
@@ -136,6 +139,7 @@ private struct TerminalSurface: NSViewRepresentable {
 /// switched away.
 final class TerminalSession: ObservableObject {
     let id: UUID
+    let backend: AgentBackend
     let command: [String]
     private(set) var workingDirectory: URL
     private let backgroundColor: NSColor
@@ -160,8 +164,9 @@ final class TerminalSession: ObservableObject {
     private var readinessSettle: DispatchWorkItem?
     private var readinessDeadline: DispatchWorkItem?
 
-    init(id: UUID, command: [String], workingDirectory: URL, backgroundColor: NSColor, font: NSFont) {
+    init(id: UUID, backend: AgentBackend, command: [String], workingDirectory: URL, backgroundColor: NSColor, font: NSFont) {
         self.id = id
+        self.backend = backend
         self.command = command
         self.workingDirectory = workingDirectory
         self.backgroundColor = backgroundColor
@@ -193,15 +198,14 @@ final class TerminalSession: ObservableObject {
         if environment["LANG"] == nil {
             environment["LANG"] = "en_US.UTF-8"
         }
-        // Let the CLI return a delegated result: `deck-reply` on PATH, the
-        // routing IPC endpoint, and this panel's session id so the Deck can
-        // close the loop back to whoever delegated here.
-        environment["PATH"] = DeckReplyTool.binDirectory.path + ":" + (environment["PATH"] ?? "")
-        environment.merge(DeckRoutingIPCServer.shared.environmentVariables()) { _, new in new }
-        environment["HERMES_DECK_PANEL_SESSION"] = id.uuidString
+        // Wire the CLI to the Deck MCP server so it can call `deck_reply` to
+        // return a delegated result — discovered natively, nothing pasted into
+        // the terminal.
+        let mcp = AgentPanelMCP.configure(backend: backend, sessionID: id)
+        environment.merge(mcp.environment) { _, new in new }
         view.startProcess(
             executable: "/usr/bin/env",
-            args: command,
+            args: command + mcp.args,
             environment: environment.map { "\($0.key)=\($0.value)" },
             currentDirectory: workingDirectory.path
         )
@@ -346,6 +350,7 @@ final class AgentTerminalSessionStore {
 
     func session(
         id: UUID,
+        backend: AgentBackend,
         command: [String],
         workingDirectory: URL,
         backgroundColor: NSColor,
@@ -360,6 +365,7 @@ final class AgentTerminalSessionStore {
         }
         let session = TerminalSession(
             id: id,
+            backend: backend,
             command: command,
             workingDirectory: workingDirectory,
             backgroundColor: backgroundColor,
@@ -377,6 +383,7 @@ final class AgentTerminalSessionStore {
     func submitPrompt(
         _ prompt: String,
         id: UUID,
+        backend: AgentBackend,
         command: [String],
         workingDirectory: URL,
         backgroundColor: NSColor = .textBackgroundColor,
@@ -384,6 +391,7 @@ final class AgentTerminalSessionStore {
     ) -> Bool {
         session(
             id: id,
+            backend: backend,
             command: command,
             workingDirectory: workingDirectory,
             backgroundColor: backgroundColor,

@@ -549,14 +549,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
             PanelPrompt(backend: .acp(.codex), threadID: codexThread.id, prompt: "inspect repo")
         ])
         #expect(store.threadBackends[codexThread.id] == .acp(.codex))
-        #expect(store.threadHandoffs[researcherThreadID]?.items.first?.phase == .replied("Prompt sent to Codex panel."))
-
-        let researcherMsgs = try #require(store.thread(id: researcherThreadID)?.messages)
-        #expect(researcherMsgs.contains {
-            $0.role == .user
-                && $0.isAgentReplyFollowUp == true
-                && $0.content == "Codex replied:\n\nPrompt sent to Codex panel."
-        })
+        #expect(store.threadHandoffs[researcherThreadID]?.items.first?.phase == .waiting)
     }
 
     @Test
@@ -594,23 +587,10 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         )
 
         let message = "done: inspected the repo"
-        let request = DeckRoutingIPCRequest(
-            token: "",
-            type: "reply",
-            target: nil,
-            prompt: nil,
-            wait: nil,
-            sourceSessionKey: nil,
-            sourceProfileID: nil,
-            session: panelThreadID.uuidString,
-            messageB64: Data(message.utf8).base64EncodedString()
-        )
-        let response = store.handleDeckRoutingIPCRequest(request)
-
-        #expect(response.ok)
+        #expect(store.deliverPanelReply(session: panelThreadID.uuidString, message: message))
         #expect(store.threadHandoffs[source.id]?.items.first?.phase == .replied(message))
         // The binding is consumed; a second reply finds nothing pending.
-        #expect(!store.handleDeckRoutingIPCRequest(request).ok)
+        #expect(!store.deliverPanelReply(session: panelThreadID.uuidString, message: message))
 
         // The follow-up to the source agent is dispatched asynchronously.
         try await Task.sleep(for: .milliseconds(300))
@@ -645,18 +625,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         #expect(store.threadHandoffs[source.id]?.items.first?.phase == .failed)
 
         // A reply arriving after the timeout finds nothing pending.
-        let request = DeckRoutingIPCRequest(
-            token: "",
-            type: "reply",
-            target: nil,
-            prompt: nil,
-            wait: nil,
-            sourceSessionKey: nil,
-            sourceProfileID: nil,
-            session: panelThreadID.uuidString,
-            messageB64: Data("late".utf8).base64EncodedString()
-        )
-        #expect(!store.handleDeckRoutingIPCRequest(request).ok)
+        #expect(!store.deliverPanelReply(session: panelThreadID.uuidString, message: "late"))
     }
 
     @Test

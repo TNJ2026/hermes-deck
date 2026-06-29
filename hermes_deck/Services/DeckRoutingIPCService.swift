@@ -3,29 +3,19 @@ import Network
 
 struct DeckRoutingIPCRequest: Decodable, Sendable {
     var token: String
-    /// `"delegate"` (default, the gateway tool) or `"reply"` (a panel CLI
-    /// returning its result via `deck-reply`).
-    var type: String?
     var target: String?
     var prompt: String?
     var wait: Bool?
     var sourceSessionKey: String?
     var sourceProfileID: String?
-    /// Reply path: the panel session (its thread id) and the base64-encoded
-    /// result message.
-    var session: String?
-    var messageB64: String?
 
     enum CodingKeys: String, CodingKey {
         case token
-        case type
         case target
         case prompt
         case wait
         case sourceSessionKey = "source_session_key"
         case sourceProfileID = "source_profile_id"
-        case session
-        case messageB64 = "message_b64"
     }
 }
 
