@@ -576,6 +576,53 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func panelDeckReplyClosesLoopBackToSource() async throws {
+        let source = ChatThread(title: "Researcher", profile: HermesProfile(id: "researcher", displayName: "Researcher"))
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: ""), threads: [source])
+        let panelThreadID = UUID()
+        let itemID = UUID()
+        store.threadHandoffs[source.id] = AgentHandoffBatch(
+            anchorMessageID: nil,
+            items: [AgentHandoffItem(id: itemID, targetName: "Codex", phase: .waiting)]
+        )
+        store.recordPanelReplyBinding(
+            panelThreadID: panelThreadID,
+            sourceThreadID: source.id,
+            sourceProfile: source.profile,
+            handoffItemID: itemID,
+            targetName: "Codex"
+        )
+
+        let message = "done: inspected the repo"
+        let request = DeckRoutingIPCRequest(
+            token: "",
+            type: "reply",
+            target: nil,
+            prompt: nil,
+            wait: nil,
+            sourceSessionKey: nil,
+            sourceProfileID: nil,
+            session: panelThreadID.uuidString,
+            messageB64: Data(message.utf8).base64EncodedString()
+        )
+        let response = store.handleDeckRoutingIPCRequest(request)
+
+        #expect(response.ok)
+        #expect(store.threadHandoffs[source.id]?.items.first?.phase == .replied(message))
+        // The binding is consumed; a second reply finds nothing pending.
+        #expect(!store.handleDeckRoutingIPCRequest(request).ok)
+
+        // The follow-up to the source agent is dispatched asynchronously.
+        try await Task.sleep(for: .milliseconds(300))
+        let messages = try #require(store.thread(id: source.id)?.messages)
+        #expect(messages.contains {
+            $0.role == .user
+                && $0.isAgentReplyFollowUp == true
+                && $0.content == "Codex replied:\n\n\(message)"
+        })
+    }
+
+    @Test
     func agentPanelReplyMentioningDefaultRoutesToMainHermesAgent() async throws {
         // `@default` (the main Hermes agent) is addressable from an agent's
         // reply: the segment routes into the main chat thread and the reply is

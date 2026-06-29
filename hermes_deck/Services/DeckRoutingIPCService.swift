@@ -3,19 +3,29 @@ import Network
 
 struct DeckRoutingIPCRequest: Decodable, Sendable {
     var token: String
-    var target: String
-    var prompt: String
+    /// `"delegate"` (default, the gateway tool) or `"reply"` (a panel CLI
+    /// returning its result via `deck-reply`).
+    var type: String?
+    var target: String?
+    var prompt: String?
     var wait: Bool?
     var sourceSessionKey: String?
     var sourceProfileID: String?
+    /// Reply path: the panel session (its thread id) and the base64-encoded
+    /// result message.
+    var session: String?
+    var messageB64: String?
 
     enum CodingKeys: String, CodingKey {
         case token
+        case type
         case target
         case prompt
         case wait
         case sourceSessionKey = "source_session_key"
         case sourceProfileID = "source_profile_id"
+        case session
+        case messageB64 = "message_b64"
     }
 }
 
@@ -23,6 +33,15 @@ struct DeckRoutingIPCResponse: Encodable, Sendable {
     var ok: Bool
     var status: String?
     var error: String?
+}
+
+/// Who delegated a prompt into a CLI panel, retained until that panel's
+/// `deck-reply` returns a result that closes the loop back to them.
+struct PanelReplyBinding {
+    let sourceThreadID: UUID
+    let sourceProfile: HermesProfile
+    let handoffItemID: UUID
+    let targetName: String
 }
 
 final class DeckRoutingIPCServer: @unchecked Sendable {

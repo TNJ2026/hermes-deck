@@ -18,6 +18,9 @@ extension ChatStore {
     }
 
     func handleDeckRoutingIPCRequest(_ request: DeckRoutingIPCRequest) -> DeckRoutingIPCResponse {
+        if request.type == "reply" {
+            return handleDeckPanelReply(request)
+        }
         let sessionKey = request.sourceSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !sessionKey.isEmpty else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "Missing source_session_key")
@@ -25,11 +28,11 @@ extension ChatStore {
         guard let sourceThread = deckRoutingSourceThread(for: request, sessionKey: sessionKey) else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "No Deck thread is bound to source_session_key \(sessionKey)")
         }
-        var target = request.target.trimmingCharacters(in: .whitespacesAndNewlines)
+        var target = (request.target ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if target.hasPrefix("@") {
             target.removeFirst()
         }
-        let prompt = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = (request.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty, !prompt.isEmpty else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "Both target and prompt are required")
         }
@@ -60,6 +63,46 @@ extension ChatStore {
         }
 
         return DeckRoutingIPCResponse(ok: true, status: "queued", error: nil)
+    }
+
+    /// Handles a panel CLI's `deck-reply`: looks up who delegated into that
+    /// panel and feeds the result back to them as a close-the-loop follow-up.
+    private func handleDeckPanelReply(_ request: DeckRoutingIPCRequest) -> DeckRoutingIPCResponse {
+        let session = request.session?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !session.isEmpty else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "Missing panel session")
+        }
+        guard let base64 = request.messageB64,
+              let data = Data(base64Encoded: base64),
+              let decoded = String(data: data, encoding: .utf8) else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "Invalid reply message")
+        }
+        let message = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "Empty reply message")
+        }
+        guard let binding = panelReplyBindings[session] else {
+            return DeckRoutingIPCResponse(ok: false, status: nil, error: "No pending delegation is bound to this panel session")
+        }
+        panelReplyBindings[session] = nil
+
+        setHandoffPhase(.replied(message), itemID: binding.handoffItemID, in: binding.sourceThreadID)
+        Task { @MainActor [self] in
+            let framed = AgentReplyFraming.framed([(name: binding.targetName, reply: message)])
+            _ = await send(framed, in: binding.sourceThreadID, profile: binding.sourceProfile, isAgentReplyFollowUp: true)
+        }
+        return DeckRoutingIPCResponse(ok: true, status: "delivered", error: nil)
+    }
+
+    /// Records who delegated into a panel so its `deck-reply` can close the loop
+    /// back to them. Keyed by the panel's thread id (its session key).
+    func recordPanelReplyBinding(panelThreadID: UUID, sourceThreadID: UUID, sourceProfile: HermesProfile, handoffItemID: UUID, targetName: String) {
+        panelReplyBindings[panelThreadID.uuidString] = PanelReplyBinding(
+            sourceThreadID: sourceThreadID,
+            sourceProfile: sourceProfile,
+            handoffItemID: handoffItemID,
+            targetName: targetName
+        )
     }
 
     private func deckRoutingSourceThread(for request: DeckRoutingIPCRequest, sessionKey: String) -> ChatThread? {
@@ -332,13 +375,23 @@ extension ChatStore {
                         try? await Task.sleep(for: .milliseconds(offset * 300))
                     }
                     if isExternal, closesLoopToSource {
-                        let sent = await sendPromptToExternalAgentPanel(message, backend: backend, threadID: agentThreadID)
-                        let panelMessage = "Prompt sent to \(profile.displayName) panel."
+                        // Forward into the live panel CLI, primed to return its
+                        // result via `deck-reply`. The hand-off stays waiting and
+                        // is closed asynchronously when that reply arrives, so we
+                        // don't contribute a synchronous close-the-loop entry.
+                        let primed = DeckReplyPrimer.wrap(message)
+                        let sent = await sendPromptToExternalAgentPanel(primed, backend: backend, threadID: agentThreadID)
                         if sent {
-                            setHandoffPhase(.replied(panelMessage), itemID: handoffItemID, in: sourceThreadID)
-                            return (name: profile.displayName, reply: panelMessage)
+                            recordPanelReplyBinding(
+                                panelThreadID: agentThreadID,
+                                sourceThreadID: sourceThreadID,
+                                sourceProfile: sourceProfile,
+                                handoffItemID: handoffItemID,
+                                targetName: profile.displayName
+                            )
+                        } else {
+                            setHandoffPhase(.failed, itemID: handoffItemID, in: sourceThreadID)
                         }
-                        setHandoffPhase(.failed, itemID: handoffItemID, in: sourceThreadID)
                         return nil
                     }
                     let routedResult = await send(

@@ -57,6 +57,7 @@ private struct ChatWindowRoot: View {
         ContentView(store: store)
             .task {
                 store.startDeckRoutingIPC()
+                DeckReplyTool.install()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 // Kill spawned agent subprocesses (ACP adapter subtrees and the

@@ -85,6 +85,9 @@ final class ChatStore {
     var unavailableExternalAgentProfileIDs: Set<String> = []
     var sessionSearchQuery = ""
     @ObservationIgnored var externalAgentPanelPromptSender: ((AgentBackend, UUID, String) async -> Bool)?
+    /// Who delegated into each CLI panel, so the panel's `deck-reply` can close
+    /// the loop back to them. Keyed by the panel's thread id.
+    @ObservationIgnored var panelReplyBindings: [String: PanelReplyBinding] = [:]
 
     var selectedThread: ChatThread? {
         get {

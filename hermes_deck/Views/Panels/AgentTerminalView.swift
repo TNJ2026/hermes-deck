@@ -193,6 +193,12 @@ final class TerminalSession: ObservableObject {
         if environment["LANG"] == nil {
             environment["LANG"] = "en_US.UTF-8"
         }
+        // Let the CLI return a delegated result: `deck-reply` on PATH, the
+        // routing IPC endpoint, and this panel's session id so the Deck can
+        // close the loop back to whoever delegated here.
+        environment["PATH"] = DeckReplyTool.binDirectory.path + ":" + (environment["PATH"] ?? "")
+        environment.merge(DeckRoutingIPCServer.shared.environmentVariables()) { _, new in new }
+        environment["HERMES_DECK_PANEL_SESSION"] = id.uuidString
         view.startProcess(
             executable: "/usr/bin/env",
             args: command,
