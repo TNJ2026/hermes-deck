@@ -27,13 +27,13 @@ struct ChatDetailView: View {
     var sendBackend: AgentBackend = .hermes
     var onFileImportRequested: (UUID?) -> Void = { _ in }
     private let bottomAnchorID = "chat-bottom-anchor"
+    private let handoffStatusID = "chat-handoff-status"
     private let scrollSpace = "chat-scroll-space"
     /// How close (pt) the bottom anchor must be to the viewport bottom for the
     /// view to count as "following" and keep auto-scrolling.
     private let bottomFollowThreshold: CGFloat = 120
 
     @State private var viewportHeight: CGFloat = 0
-    @State private var bottomAnchorOffset: CGFloat = 0
     /// Whether the user is parked at the bottom. Auto-scroll is suppressed while
     /// they've scrolled up to read history.
     @State private var isPinnedToBottom = true
@@ -71,6 +71,7 @@ struct ChatDetailView: View {
                                     if let batch = store.threadHandoffs[thread.id],
                                        batch.anchorMessageID == message.id {
                                         AgentHandoffStatusView(items: batch.items)
+                                            .id(handoffStatusID)
                                     }
                                 }
                                 if showsThinkingIndicator {
@@ -100,11 +101,16 @@ struct ChatDetailView: View {
                         )
                         .onPreferenceChange(ViewportHeightKey.self) {
                             viewportHeight = $0
-                            recomputePinned()
                         }
-                        .onPreferenceChange(BottomAnchorOffsetKey.self) {
-                            bottomAnchorOffset = $0
-                            recomputePinned()
+                        .onPreferenceChange(BottomAnchorOffsetKey.self) { offset in
+                            guard viewportHeight > 0 else { return }
+                            let pinned = offset <= viewportHeight + bottomFollowThreshold
+                            if isPinnedToBottom != pinned {
+                                isPinnedToBottom = pinned
+                            }
+                            if pinned, isHoldingForUserScroll {
+                                endUserScrollHold()
+                            }
                         }
                         .fileLinkHandler(baseDirectory: messageBaseDirectory)
                         // Lets the renderer show AgentRouting blocks as
@@ -142,14 +148,14 @@ struct ChatDetailView: View {
                                 endUserScrollHold()
                                 isPinnedToBottom = true
                             }
-                            scrollToBottom(with: proxy, animated: true)
+                            scrollToBottom(with: proxy, animated: true, deferred: true)
                         }
                         // Streaming growth follows the bottom instantly — animating
                         // each token stacks dozens of springs a second and makes the
                         // view jitter. Suppressed when the user has scrolled up.
                         .onChange(of: streamingTrigger(for: thread)) {
                             guard isPinnedToBottom, !isHoldingForUserScroll else { return }
-                            scrollToBottom(with: proxy, animated: false)
+                            scrollToBottom(with: proxy, animated: false, deferred: true)
                         }
                     }
                     if showsComposer {
@@ -427,19 +433,6 @@ struct ChatDetailView: View {
         }
     }
 
-    /// Re-evaluates whether the view is parked at the bottom. The bottom anchor's
-    /// offset (in scroll-space) sits near the viewport height when at the bottom
-    /// and grows larger as the user scrolls up.
-    private func recomputePinned() {
-        guard viewportHeight > 0 else { return }
-        isPinnedToBottom = bottomAnchorOffset <= viewportHeight + bottomFollowThreshold
-        // The user scrolled back to the bottom themselves — resume following
-        // immediately instead of waiting out the 2s hold.
-        if isPinnedToBottom, isHoldingForUserScroll {
-            endUserScrollHold()
-        }
-    }
-
     /// Pauses auto-follow on a manual upward scroll over this list, restarting
     /// the 2s release timer on every further scroll event. On release, jump
     /// back to the bottom only if a reply is still streaming — a user reading
@@ -473,7 +466,7 @@ struct ChatDetailView: View {
             isHoldingForUserScroll = false
             if isStreamingReply {
                 isPinnedToBottom = true
-                scrollToBottom(with: proxy, animated: true)
+                scrollToBottom(with: proxy, animated: true, deferred: true)
             }
         }
     }
@@ -511,17 +504,56 @@ struct ChatDetailView: View {
         return nil
     }
 
-    private func scrollToBottom(with proxy: ScrollViewProxy, animated: Bool) {
-        let action = {
-            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+    /// Element `scrollTo` lands on. Targets a real, measured row — the thinking
+    /// indicator or the last message — instead of the zero-height bottom anchor.
+    /// Scrolling a `Color.clear` spacer inside a `LazyVStack` resolves against
+    /// estimated heights of the unrealized rows above it and intermittently
+    /// overshoots the content bounds, blanking the whole list for a frame.
+    /// Falls back to the anchor only for an empty thread.
+    private var bottomScrollTargetID: AnyHashable {
+        if showsThinkingIndicator { return "thinking-indicator" }
+        if let thread = displayedThread, let last = visibleMessages(in: thread).last {
+            // A hand-off status card anchored to the last visible message
+            // renders below it, so target the card — otherwise its replies
+            // grow off-screen with the message bottom pinned to the viewport.
+            if let batch = store.threadHandoffs[thread.id],
+               !batch.items.isEmpty,
+               batch.anchorMessageID == last.id {
+                return handoffStatusID
+            }
+            return last.id
+        }
+        return bottomAnchorID
+    }
+
+    /// Scrolls to the bottom target. Reactive follows (new message, streaming
+    /// growth) pass `deferred: true` so the scroll runs after the current
+    /// `LazyVStack` layout pass settles — computing the offset mid-layout is
+    /// what overshoots and blanks the list. Initial positioning (appear, thread
+    /// switch) scrolls synchronously to avoid a first-frame flash from the top.
+    private func scrollToBottom(with proxy: ScrollViewProxy, animated: Bool, deferred: Bool = false) {
+        let scroll = {
+            let targetID = bottomScrollTargetID
+            if animated {
+                withAnimation(.smooth) {
+                    proxy.scrollTo(targetID, anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo(targetID, anchor: .bottom)
+            }
         }
 
-        if animated {
-            withAnimation(.smooth) {
-                action()
+        if deferred {
+            // The onChange guard that approved this scroll ran a runloop tick
+            // ago; a scroll-wheel gesture landing in that gap starts a hold.
+            // Re-check the live `@State` here so a queued follow doesn't yank
+            // the user back down right as they begin scrolling up.
+            DispatchQueue.main.async {
+                guard !isHoldingForUserScroll else { return }
+                scroll()
             }
         } else {
-            action()
+            scroll()
         }
     }
 
@@ -530,8 +562,12 @@ struct ChatDetailView: View {
     /// Excludes message count (a new message is handled by its own animated
     /// scroll) so streaming never triggers the animated path.
     private func streamingTrigger(for thread: ChatThread) -> ChatScrollTrigger {
+        // Hand-off status cards stream their replies without changing the
+        // message list, so fold their items in — otherwise the card grows
+        // below the last message with no trigger to follow it.
+        let handoffItems = store.threadHandoffs[thread.id]?.items ?? []
         guard let lastMessage = thread.messages.last else {
-            return ChatScrollTrigger(threadID: thread.id)
+            return ChatScrollTrigger(threadID: thread.id, handoffItems: handoffItems)
         }
 
         return ChatScrollTrigger(
@@ -540,7 +576,8 @@ struct ChatDetailView: View {
             content: lastMessage.content,
             segments: lastMessage.segments,
             reasoningText: lastMessage.reasoningText,
-            attachmentCount: lastMessage.attachments.count
+            attachmentCount: lastMessage.attachments.count,
+            handoffItems: handoffItems
         )
     }
 }
@@ -562,6 +599,7 @@ struct ChatScrollTrigger: Equatable {
     var segments: [AssistantSegment] = []
     var reasoningText: String = ""
     var attachmentCount: Int = 0
+    var handoffItems: [AgentHandoffItem] = []
 }
 
 enum ComposerPresentation {
