@@ -59,27 +59,14 @@ struct RightSidebarView: View {
                     case .kanban:
                         KanbanPanelView(store: store)
                     case .gemini:
-                        AgyPanelView(
-                            store: store,
-                            draft: panelDraft(for: .gemini),
-                            isFileImporterPresented: $isFileImporterPresented,
-                            onFileImportRequested: onFileImportRequested
-                        )
+                        AgyPanelView(store: store)
                     case .claude:
-                        ClaudeCLIPanelView(
-                            store: store,
-                            draft: panelDraft(for: .claude),
-                            isFileImporterPresented: $isFileImporterPresented,
-                            onFileImportRequested: onFileImportRequested
-                        )
+                        ClaudeCLIPanelView(store: store)
                     case .codex:
                         if let agent = ACPAgent(panelItem: selectedPanelItem) {
                             ACPPanelView(
                                 store: store,
-                                agent: agent,
-                                draft: panelDraft(for: .codex),
-                                isFileImporterPresented: $isFileImporterPresented,
-                                onFileImportRequested: onFileImportRequested
+                                agent: agent
                             )
                         } else {
                             RightPanelPlaceholderView(item: selectedPanelItem)
