@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import hermes_deck
 
+// Serialized: these tests share the `DeckMCPServer.shared` singleton, whose
+// `start` overwrites the handler each call — running them in parallel races the
+// handler.
+@Suite(.serialized)
 struct DeckMCPServerTests {
     @Test func agentPanelMCPWiresEachCLI() throws {
         try DeckMCPServer.shared.start { _, _ in "ok" } // ensure the endpoint is up
@@ -31,7 +35,16 @@ struct DeckMCPServerTests {
 
     @Test func deckReplyMCPHandshakeAndToolCall() async throws {
         let server = DeckMCPServer.shared
-        try server.start { session, message in "received from \(session): \(message)" }
+        try server.start(
+            replyHandler: { session, message in "received from \(session): \(message)" },
+            delegateHandler: { request in
+                DeckMCPDelegateResponse(
+                    ok: true,
+                    status: "queued \(request.target): \(request.prompt)",
+                    error: nil
+                )
+            }
+        )
         let endpoint = try #require(server.endpointURL())
         let url = try #require(URL(string: endpoint))
         let token = server.token(forSession: "panel-1")
@@ -61,18 +74,36 @@ struct DeckMCPServerTests {
         let serverInfo = (initJSON["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
         #expect(serverInfo?["name"] as? String == "hermes-deck")
 
-        // tools/list advertises deck_reply
+        // tools/list advertises the Deck bus tools.
         let (_, listJSON) = try await rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
         let tools = (listJSON["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         #expect(tools?.contains { $0["name"] as? String == "deck_reply" } == true)
+        #expect(tools?.contains { $0["name"] as? String == "deck_delegate_prompt" } == true)
 
-        // tools/call reaches the handler and returns its text
+        // deck_reply reaches the reply handler and returns its text.
         let (_, callJSON) = try await rpc([
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": ["name": "deck_reply", "arguments": ["message": "hi there"]],
         ])
         let content = ((callJSON["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first
         #expect(content?["text"] as? String == "received from panel-1: hi there")
+
+        // deck_delegate_prompt reaches the delegate handler and returns queued status.
+        let (_, delegateJSON) = try await rpc([
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": [
+                "name": "deck_delegate_prompt",
+                "arguments": [
+                    "target": "codex",
+                    "prompt": "inspect repo",
+                    "source_session_key": "source-1",
+                    "source_profile_id": "default",
+                ],
+            ],
+        ])
+        let delegateText = (((delegateJSON["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first)?["text"] as? String
+        #expect(delegateText?.contains("\"ok\":true") == true)
+        #expect(delegateText?.contains("queued codex: inspect repo") == true)
     }
 
     @Test func cleanupConfigDeletesFiles() throws {
@@ -102,4 +133,3 @@ struct DeckMCPServerTests {
         }
     }
 }
-

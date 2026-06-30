@@ -1,32 +1,37 @@
 import Foundation
 import Network
 
-/// In-process Streamable-HTTP MCP server exposing a single `deck_reply` tool to
-/// the panel CLIs (claude / codex / gemini — all speak streamable-HTTP MCP).
-/// The CLI discovers and calls the tool natively, so the reply convention is
-/// never pasted into the terminal. Each panel gets its own bearer token; the
-/// token identifies which panel is replying, so the Deck can close the loop
-/// back to whoever delegated there.
+/// In-process Streamable-HTTP MCP server exposing the Deck agent bus tools.
+/// Panel CLIs get per-panel bearer tokens so `deck_reply` can be attributed to
+/// the panel that is replying. Hermes gateway processes get a Deck bearer token
+/// through their environment so `deck_delegate_prompt` can enqueue hand-offs.
 final class DeckMCPServer: @unchecked Sendable {
     static let shared = DeckMCPServer()
 
     /// Closes the loop for a panel reply. Returns a short status string shown to
     /// the calling agent.
     typealias ReplyHandler = @Sendable (_ panelSession: String, _ message: String) async -> String
+    typealias DelegateHandler = @Sendable (_ request: DeckMCPDelegateRequest) async -> DeckMCPDelegateResponse
 
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "deck-mcp-http")
     nonisolated(unsafe) private var listener: NWListener?
     nonisolated(unsafe) private var port: UInt16?
-    nonisolated(unsafe) private var handler: ReplyHandler?
+    nonisolated(unsafe) private var replyHandler: ReplyHandler?
+    nonisolated(unsafe) private var delegateHandler: DelegateHandler?
+    nonisolated(unsafe) private var gatewayToken = UUID().uuidString
     nonisolated(unsafe) private var sessionForToken: [String: String] = [:]
     nonisolated(unsafe) private var tokenForSession: [String: String] = [:]
 
     private init() {}
 
-    func start(replyHandler: @escaping ReplyHandler) throws {
+    func start(
+        replyHandler: @escaping ReplyHandler,
+        delegateHandler: DelegateHandler? = nil
+    ) throws {
         lock.lock()
-        handler = replyHandler
+        self.replyHandler = replyHandler
+        self.delegateHandler = delegateHandler
         let already = listener != nil
         lock.unlock()
         guard !already else { return }
@@ -63,6 +68,17 @@ final class DeckMCPServer: @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.05)
         } while Date() < deadline
         return nil
+    }
+
+    nonisolated func environmentVariablesBlocking(waitingUpTo timeout: TimeInterval) -> [String: String] {
+        guard let url = endpointURL(waitingUpTo: timeout) else { return [:] }
+        lock.lock()
+        let token = gatewayToken
+        lock.unlock()
+        return [
+            "HERMES_DECK_MCP_URL": url,
+            "HERMES_DECK_MCP_TOKEN": token,
+        ]
     }
 
     // MARK: - HTTP
@@ -105,10 +121,12 @@ final class DeckMCPServer: @unchecked Sendable {
         let bearer = Self.bearerToken(in: headers)
         lock.lock()
         let session = bearer.flatMap { sessionForToken[$0] }
-        let handler = self.handler
+        let isGatewayToken = bearer == gatewayToken
+        let replyHandler = self.replyHandler
+        let delegateHandler = self.delegateHandler
         lock.unlock()
 
-        guard session != nil else {
+        guard session != nil || isGatewayToken else {
             sendHTTP(status: "401 Unauthorized", json: nil, on: connection)
             return
         }
@@ -131,9 +149,16 @@ final class DeckMCPServer: @unchecked Sendable {
                 "serverInfo": ["name": "hermes-deck", "version": "0.1.0"],
             ], on: connection)
         case "tools/list":
-            reply(id: id, result: ["tools": [Self.deckReplyToolSchema]], on: connection)
+            reply(id: id, result: ["tools": [Self.deckDelegatePromptToolSchema, Self.deckReplyToolSchema]], on: connection)
         case "tools/call":
-            handleToolCall(request, id: id, session: session ?? "", handler: handler, on: connection)
+            handleToolCall(
+                request,
+                id: id,
+                session: session ?? "",
+                replyHandler: replyHandler,
+                delegateHandler: delegateHandler,
+                on: connection
+            )
         default:
             reply(id: id, error: "Method not found: \(method)", code: -32601, on: connection)
         }
@@ -146,14 +171,35 @@ final class DeckMCPServer: @unchecked Sendable {
         return String(value.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespaces)
     }
 
-    private func handleToolCall(_ request: [String: Any], id: Any?, session: String, handler: ReplyHandler?, on connection: NWConnection) {
+    private func handleToolCall(
+        _ request: [String: Any],
+        id: Any?,
+        session: String,
+        replyHandler: ReplyHandler?,
+        delegateHandler: DelegateHandler?,
+        on connection: NWConnection
+    ) {
         let params = request["params"] as? [String: Any]
         let name = params?["name"] as? String ?? ""
         let arguments = params?["arguments"] as? [String: Any] ?? [:]
-        guard name == "deck_reply" else {
+
+        switch name {
+        case "deck_reply":
+            handleDeckReply(arguments: arguments, id: id, session: session, handler: replyHandler, on: connection)
+        case "deck_delegate_prompt":
+            handleDeckDelegatePrompt(arguments: arguments, id: id, handler: delegateHandler, on: connection)
+        default:
             reply(id: id, error: "Unknown tool: \(name)", code: -32602, on: connection)
-            return
         }
+    }
+
+    private func handleDeckReply(
+        arguments: [String: Any],
+        id: Any?,
+        session: String,
+        handler: ReplyHandler?,
+        on connection: NWConnection
+    ) {
         let message = (arguments["message"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else {
             reply(id: id, result: Self.toolResult("message is required", isError: true), on: connection)
@@ -164,6 +210,55 @@ final class DeckMCPServer: @unchecked Sendable {
             self.reply(id: id, result: Self.toolResult(text, isError: false), on: connection)
         }
     }
+
+    private func handleDeckDelegatePrompt(
+        arguments: [String: Any],
+        id: Any?,
+        handler: DelegateHandler?,
+        on connection: NWConnection
+    ) {
+        var target = (arguments["target"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if target.hasPrefix("@") { target.removeFirst() }
+        let prompt = (arguments["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            reply(id: id, result: Self.toolResult("target is required", isError: true), on: connection)
+            return
+        }
+        guard !prompt.isEmpty else {
+            reply(id: id, result: Self.toolResult("prompt is required", isError: true), on: connection)
+            return
+        }
+
+        let request = DeckMCPDelegateRequest(
+            target: target,
+            prompt: prompt,
+            wait: arguments["wait"] as? Bool,
+            sourceSessionKey: (arguments["source_session_key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            sourceProfileID: (arguments["source_profile_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        Task {
+            let response = await handler?(request)
+                ?? DeckMCPDelegateResponse(ok: false, status: nil, error: "Hermes Deck is not handling delegations right now.")
+            let text = response.jsonString
+            self.reply(id: id, result: Self.toolResult(text, isError: !response.ok), on: connection)
+        }
+    }
+
+    private static let deckDelegatePromptToolSchema: [String: Any] = [
+        "name": "deck_delegate_prompt",
+        "description": "Delegate a focused prompt to another Hermes Deck agent/profile or external panel. Returns queued/sent status; replies arrive asynchronously through deck_reply.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "target": ["type": "string", "description": "Deck target alias without @, such as default, coding, claude, codex, or gemini."],
+                "prompt": ["type": "string", "description": "Self-contained prompt to send to the target agent."],
+                "wait": ["type": "boolean", "description": "Reserved for synchronous waiting; currently handled as async."],
+                "source_session_key": ["type": "string", "description": "Hermes source session/task key, supplied by the Deck plugin."],
+                "source_profile_id": ["type": "string", "description": "Hermes source profile id, supplied by the Deck plugin."],
+            ],
+            "required": ["target", "prompt"],
+        ],
+    ]
 
     private static let deckReplyToolSchema: [String: Any] = [
         "name": "deck_reply",
@@ -199,5 +294,28 @@ final class DeckMCPServer: @unchecked Sendable {
         var data = Data(response.utf8)
         data.append(body)
         connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+
+struct DeckMCPDelegateRequest: Sendable {
+    var target: String
+    var prompt: String
+    var wait: Bool?
+    var sourceSessionKey: String?
+    var sourceProfileID: String?
+}
+
+struct DeckMCPDelegateResponse: Sendable {
+    var ok: Bool
+    var status: String?
+    var error: String?
+
+    var jsonString: String {
+        var payload: [String: Any] = ["ok": ok]
+        if let status { payload["status"] = status }
+        if let error { payload["error"] = error }
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
+            ?? Data(#"{"ok":false,"error":"Failed to encode Deck MCP response"}"#.utf8)
+        return String(decoding: data, as: UTF8.self)
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Wires a panel CLI to the Deck MCP server so it can discover and call
-/// `deck_reply` — no instruction pasted into the terminal. Each CLI configures
+/// Wires a panel CLI to the Deck MCP server so it can discover and call Deck
+/// tools — no reply instruction pasted into the terminal. Each CLI configures
 /// streamable-HTTP MCP differently, so this returns the extra launch args and
 /// environment (and writes any config files) for one panel.
 enum AgentPanelMCP {
@@ -115,9 +115,15 @@ enum AgentPanelMCP {
 enum DeckReplyPrimer {
     /// Whether a backend takes the convention via its system prompt at launch
     /// (so the visible prompt stays clean) rather than a per-turn prefix.
+    ///
+    /// Always false: a session-wide system prompt can't tell the model which
+    /// turn is the delegated one (the injected prompt is indistinguishable from
+    /// a user message in an interactive TUI), so the model answers in-panel and
+    /// never calls `deck_reply`. The per-turn primer is the reliable signal.
+    /// claude still gets `--append-system-prompt` as extra context, but the
+    /// primer is what triggers the reply.
     static func usesSystemPrompt(_ backend: AgentBackend) -> Bool {
-        if case .claudeCLI = backend { return true }
-        return false
+        false
     }
 
     /// Visible, per-turn instruction for CLIs without a clean system-prompt hook
@@ -126,7 +132,9 @@ enum DeckReplyPrimer {
         """
         [Hermes Deck] A teammate delegated this task to you. When you have the \
         final result, return it to them by calling the `deck_reply` tool with \
-        your result as the `message` argument, then stop.
+        your result as the `message` argument, then stop. Use \
+        `deck_delegate_prompt` only when you need to delegate a focused subtask \
+        to another Deck target.
 
         Task:
         \(prompt)
@@ -141,7 +149,8 @@ enum DeckReplyPrimer {
     task to you. When you finish a task that was delegated to you, return the \
     result to that teammate by calling the `deck_reply` tool with your result as \
     the `message` argument — call it exactly once, when the delegated task is \
-    complete. Do not call `deck_reply` for the user's own direct messages.
+    complete. Use `deck_delegate_prompt` only when you need to delegate a \
+    focused subtask to another Deck target. Do not call `deck_reply` for the \
+    user's own direct messages.
     """
 }
-
