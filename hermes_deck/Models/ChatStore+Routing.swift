@@ -17,33 +17,69 @@ extension ChatStore {
         }
     }
 
-    /// Hosts the MCP server the CLI panels use to return delegated results: a
-    /// `deck_reply` tool call (attributed to a panel by its bearer token) closes
-    /// the loop back to whoever delegated there.
+    /// Hosts the MCP server the agents use as the Deck bus:
+    /// `deck_delegate_prompt` enqueues a hand-off, while `deck_reply` closes the
+    /// loop back to whoever delegated into a panel.
     func startDeckMCPServer() {
-        try? DeckMCPServer.shared.start { [weak self] panelSession, message in
-            await MainActor.run {
-                guard let self else { return "Hermes Deck is unavailable." }
-                return self.deliverPanelReply(session: panelSession, message: message)
-                    ? "Returned to the requesting agent."
-                    : "No pending Hermes Deck delegation for this panel."
+        try? DeckMCPServer.shared.start(
+            replyHandler: { [weak self] panelSession, message in
+                await MainActor.run {
+                    guard let self else { return "Hermes Deck is unavailable." }
+                    return self.deliverPanelReply(session: panelSession, message: message)
+                        ? "Returned to the requesting agent."
+                        : "No pending Hermes Deck delegation for this panel."
+                }
+            },
+            delegateHandler: { [weak self] request in
+                await MainActor.run {
+                    guard let self else {
+                        return DeckMCPDelegateResponse(ok: false, status: nil, error: "Hermes Deck is unavailable.", fallback: true)
+                    }
+                    let response = self.enqueueDelegation(
+                        target: request.target,
+                        prompt: request.prompt,
+                        wait: request.wait,
+                        sourceSessionKey: request.sourceSessionKey,
+                        sourceProfileID: request.sourceProfileID
+                    )
+                    return DeckMCPDelegateResponse(ok: response.ok, status: response.status, error: response.error)
+                }
             }
-        }
+        )
     }
 
     func handleDeckRoutingIPCRequest(_ request: DeckRoutingIPCRequest) -> DeckRoutingIPCResponse {
-        let sessionKey = request.sourceSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        enqueueDelegation(
+            target: request.target,
+            prompt: request.prompt,
+            wait: request.wait,
+            sourceSessionKey: request.sourceSessionKey,
+            sourceProfileID: request.sourceProfileID
+        )
+    }
+
+    func enqueueDelegation(
+        target rawTarget: String?,
+        prompt rawPrompt: String?,
+        wait: Bool?,
+        sourceSessionKey: String?,
+        sourceProfileID: String?
+    ) -> DeckRoutingIPCResponse {
+        let sessionKey = sourceSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !sessionKey.isEmpty else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "Missing source_session_key")
         }
-        guard let sourceThread = deckRoutingSourceThread(for: request, sessionKey: sessionKey) else {
+        guard let sourceThread = deckRoutingSourceThread(
+            sourceSessionKey: sessionKey,
+            sourceProfileID: sourceProfileID
+        ) else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "No Deck thread is bound to source_session_key \(sessionKey)")
         }
-        var target = (request.target ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if target.hasPrefix("@") {
             target.removeFirst()
         }
-        let prompt = (request.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = (rawPrompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty, !prompt.isEmpty else {
             return DeckRoutingIPCResponse(ok: false, status: nil, error: "Both target and prompt are required")
         }
@@ -82,6 +118,10 @@ extension ChatStore {
     @discardableResult
     func deliverPanelReply(session: String, message: String) -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strict match only: the MCP bearer token maps to the same panel thread
+        // id as the binding, so an exact lookup is correct. A "single pending
+        // binding" fallback would misroute a stale reply (e.g. a timed-out
+        // Codex hand-off replying late) onto an unrelated waiting hand-off.
         guard !trimmed.isEmpty, let binding = panelReplyBindings[session] else { return false }
         panelReplyBindings[session] = nil
         panelReplyTimeouts[session]?.cancel()
@@ -122,12 +162,12 @@ extension ChatStore {
         setHandoffPhase(.failed, itemID: binding.handoffItemID, in: binding.sourceThreadID)
     }
 
-    private func deckRoutingSourceThread(for request: DeckRoutingIPCRequest, sessionKey: String) -> ChatThread? {
+    private func deckRoutingSourceThread(sourceSessionKey sessionKey: String, sourceProfileID: String?) -> ChatThread? {
         if let sourceThread = threads.first(where: { $0.hermesSessionID == sessionKey }) {
             return sourceThread
         }
 
-        let profileID = request.sourceProfileID?
+        let profileID = sourceProfileID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
         guard !profileID.isEmpty else { return nil }

@@ -358,6 +358,7 @@ actor HermesTUIGatewayClient: HermesAgentClient {
         // `deck-routing` @target-code-block convention works.
         environment["HERMES_DECK"] = "1"
         environment.merge(DeckRoutingIPCServer.shared.environmentVariablesBlocking(waitingUpTo: 2)) { _, new in new }
+        environment.merge(DeckMCPServer.shared.environmentVariablesBlocking(waitingUpTo: 2)) { _, new in new }
         let executableBin = executableURL.deletingLastPathComponent()
         let venvURL = executableBin.deletingLastPathComponent()
         environment["VIRTUAL_ENV"] = normalizedPath(venvURL)

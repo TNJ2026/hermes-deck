@@ -126,6 +126,8 @@ actor LocalHermesGatewayProvider: HermesGatewayProvider {
             }
             .environmentVariables(waitingUpTo: 2)
             environment.merge(routingEnvironment) { _, new in new }
+            let mcpEnvironment = await DeckMCPServer.shared.environmentVariables(waitingUpTo: 2)
+            environment.merge(mcpEnvironment) { _, new in new }
         }
         return environment
     }

@@ -603,6 +603,34 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
     }
 
     @Test
+    func panelDeckReplyDoesNotMisrouteWhenSessionKeyUnknown() async throws {
+        let source = ChatThread(title: "Researcher", profile: HermesProfile(id: "researcher", displayName: "Researcher"))
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: ""), threads: [source])
+        let panelThreadID = UUID()
+        let itemID = UUID()
+        store.threadHandoffs[source.id] = AgentHandoffBatch(
+            anchorMessageID: nil,
+            items: [AgentHandoffItem(id: itemID, targetName: "Codex", phase: .waiting)]
+        )
+        store.recordPanelReplyBinding(
+            panelThreadID: panelThreadID,
+            sourceThreadID: source.id,
+            sourceProfile: source.profile,
+            handoffItemID: itemID,
+            targetName: "Codex"
+        )
+
+        // A reply under a session key that doesn't match the binding (e.g. a
+        // stale, already-timed-out panel replying late) must NOT be misrouted
+        // onto the single unrelated pending hand-off.
+        #expect(!store.deliverPanelReply(session: UUID().uuidString, message: "stale result"))
+        #expect(store.threadHandoffs[source.id]?.items.first?.phase == .waiting)
+        // The matching session still delivers.
+        #expect(store.deliverPanelReply(session: panelThreadID.uuidString, message: "real result"))
+        #expect(store.threadHandoffs[source.id]?.items.first?.phase == .replied("real result"))
+    }
+
+    @Test
     func panelDelegationTimesOutWhenNoReply() async throws {
         let source = ChatThread(title: "Researcher", profile: HermesProfile(id: "researcher", displayName: "Researcher"))
         let store = ChatStore(agentClient: StubHermesAgentClient(reply: ""), threads: [source])
@@ -1269,6 +1297,78 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let messages = try #require(store.thread(id: sourceThread.id)?.messages)
         #expect(messages.last?.role == .assistant)
         #expect(messages.last?.content.contains("```AgentRouting\n@default\nplease check this\n```") == true)
+    }
+
+    @Test
+    func deckMCPDelegationEnqueuesHermesProfileRoute() async throws {
+        let coding = HermesProfile(id: "coding", displayName: "Coding")
+        let sourceThread = ChatThread(title: "Coding", profile: coding)
+        let store = ChatStore(agentClient: StubHermesAgentClient(reply: "default ok"), threads: [sourceThread])
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            coding,
+        ]
+        store.selectedThreadID = sourceThread.id
+
+        let response = store.enqueueDelegation(
+            target: "default",
+            prompt: "please check this",
+            wait: false,
+            sourceSessionKey: "gateway-session",
+            sourceProfileID: "coding"
+        )
+
+        #expect(response.ok == true)
+        #expect(response.status == "queued")
+        #expect(store.thread(id: sourceThread.id)?.hermesSessionID == "gateway-session")
+        let messages = try #require(store.thread(id: sourceThread.id)?.messages)
+        #expect(messages.last?.content.contains("```AgentRouting\n@default\nplease check this\n```") == true)
+    }
+
+    @Test
+    func deckMCPDelegationToExternalPanelClosesLoopWithDeckReply() async throws {
+        struct PanelPrompt: Equatable {
+            let backend: AgentBackend
+            let threadID: UUID
+            let prompt: String
+        }
+
+        let coding = HermesProfile(id: "coding", displayName: "Coding")
+        let sourceThread = ChatThread(title: "Coding", profile: coding)
+        var panelPrompts: [PanelPrompt] = []
+        let store = ChatStore(
+            agentClient: StubHermesAgentClient(reply: ""),
+            threads: [sourceThread],
+            externalAgentPanelPromptSender: { backend, threadID, prompt in
+                panelPrompts.append(PanelPrompt(backend: backend, threadID: threadID, prompt: prompt))
+                return true
+            }
+        )
+        store.availableProfiles = [
+            HermesProfile(id: "default", displayName: "Hermes agent"),
+            coding,
+        ]
+        store.selectedThreadID = sourceThread.id
+
+        let response = store.enqueueDelegation(
+            target: "codex",
+            prompt: "inspect repo",
+            wait: false,
+            sourceSessionKey: "gateway-session",
+            sourceProfileID: "coding"
+        )
+
+        #expect(response.ok == true)
+        try await Task.sleep(for: .milliseconds(300))
+        let codexThread = try #require(store.threads.first { $0.profile.id == "acp:codex" })
+        #expect(panelPrompts == [
+            PanelPrompt(backend: .acp(.codex), threadID: codexThread.id, prompt: DeckReplyPrimer.wrap("inspect repo"))
+        ])
+        #expect(store.threadHandoffs[sourceThread.id]?.items.first?.phase == .waiting)
+
+        let message = "done"
+        #expect(store.deliverPanelReply(session: codexThread.id.uuidString, message: message))
+        #expect(store.threadHandoffs[sourceThread.id]?.items.first?.phase == .replied(message))
     }
 
     @Test
@@ -2118,9 +2218,10 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
         let manifest = try String(contentsOf: pluginDirectory.appendingPathComponent("plugin.yaml"), encoding: .utf8)
         let source = try String(contentsOf: pluginDirectory.appendingPathComponent("__init__.py"), encoding: .utf8)
         #expect(manifest.contains("provides_tools:\n  - deck_delegate_agent"))
-        #expect(manifest.contains("version: 0.1.2"))
+        #expect(manifest.contains("version: 0.1.3"))
         #expect(source.contains("TOOL_NAME = \"deck_delegate_agent\""))
         #expect(source.contains("\"source_profile_id\": source_profile_id"))
+        #expect(source.contains("HERMES_DECK_MCP_URL"))
         #expect(!source.contains("HERMES_DECK_ROUTE_SOCKET"))
 
         let config = HermesConfigurationFile(url: home.appendingPathComponent("config.yaml"))
@@ -2145,7 +2246,7 @@ enum RightPanelItem: String, CaseIterable, Identifiable {
 
         let status = try await provider.deckDelegationPluginStatus(profile: profile)
 
-        #expect(status == .outdated(installedVersion: "0.1.0", bundledVersion: "0.1.2"))
+        #expect(status == .outdated(installedVersion: "0.1.0", bundledVersion: "0.1.3"))
     }
 
     @Test

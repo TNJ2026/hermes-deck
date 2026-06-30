@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import hermes_deck
 
+// Serialized: these tests share the `DeckMCPServer.shared` singleton, whose
+// `start` overwrites the handler each call — running them in parallel races the
+// handler.
+@Suite(.serialized)
 struct DeckMCPServerTests {
     @Test func agentPanelMCPWiresEachCLI() throws {
         try DeckMCPServer.shared.start { _, _ in "ok" } // ensure the endpoint is up
@@ -31,48 +35,89 @@ struct DeckMCPServerTests {
 
     @Test func deckReplyMCPHandshakeAndToolCall() async throws {
         let server = DeckMCPServer.shared
-        try server.start { session, message in "received from \(session): \(message)" }
+        try server.start(
+            replyHandler: { session, message in "received from \(session): \(message)" },
+            delegateHandler: { request in
+                DeckMCPDelegateResponse(
+                    ok: true,
+                    status: "queued \(request.target): \(request.prompt)",
+                    error: nil
+                )
+            }
+        )
         let endpoint = try #require(server.endpointURL())
         let url = try #require(URL(string: endpoint))
-        let token = server.token(forSession: "panel-1")
+        let panelToken = server.token(forSession: "panel-1")
+        let gatewayToken = try #require(server.environmentVariablesBlocking(waitingUpTo: 2)["HERMES_DECK_MCP_TOKEN"])
 
-        func rpc(_ payload: [String: Any], auth: Bool = true) async throws -> (Int, [String: Any]) {
+        func rpc(_ payload: [String: Any], token: String?) async throws -> (Int, [String: Any]) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if auth { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             let (data, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
             return (code, json)
         }
+        func names(_ json: [String: Any]) -> [String] {
+            ((json["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        }
+        func callText(_ json: [String: Any]) -> String? {
+            (((json["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first)?["text"] as? String
+        }
 
-        // Missing/wrong bearer token is rejected.
-        let (unauthorized, _) = try await rpc(["jsonrpc": "2.0", "id": 1, "method": "initialize"], auth: false)
+        // No token is rejected.
+        let (unauthorized, _) = try await rpc(["jsonrpc": "2.0", "id": 1, "method": "initialize"], token: nil)
         #expect(unauthorized == 401)
 
         // initialize
         let (initCode, initJSON) = try await rpc([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18"],
-        ])
+        ], token: panelToken)
         #expect(initCode == 200)
-        let serverInfo = (initJSON["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
-        #expect(serverInfo?["name"] as? String == "hermes-deck")
+        #expect(((initJSON["result"] as? [String: Any])?["serverInfo"] as? [String: Any])?["name"] as? String == "hermes-deck")
 
-        // tools/list advertises deck_reply
-        let (_, listJSON) = try await rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
-        let tools = (listJSON["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        #expect(tools?.contains { $0["name"] as? String == "deck_reply" } == true)
+        // A panel token sees and may call deck_reply only.
+        let (_, panelList) = try await rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], token: panelToken)
+        #expect(names(panelList) == ["deck_reply"])
 
-        // tools/call reaches the handler and returns its text
-        let (_, callJSON) = try await rpc([
+        let (_, replyJSON) = try await rpc([
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": ["name": "deck_reply", "arguments": ["message": "hi there"]],
-        ])
-        let content = ((callJSON["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first
-        #expect(content?["text"] as? String == "received from panel-1: hi there")
+        ], token: panelToken)
+        #expect(callText(replyJSON) == "received from panel-1: hi there")
+
+        // A panel token must NOT be able to delegate as a Hermes source.
+        let (_, panelDelegate) = try await rpc([
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": ["name": "deck_delegate_prompt", "arguments": ["target": "codex", "prompt": "x", "source_session_key": "source-1"]],
+        ], token: panelToken)
+        #expect((panelDelegate["error"] as? [String: Any]) != nil)
+
+        // A gateway token sees and may call deck_delegate_prompt only.
+        let (_, gatewayList) = try await rpc(["jsonrpc": "2.0", "id": 5, "method": "tools/list"], token: gatewayToken)
+        #expect(names(gatewayList) == ["deck_delegate_prompt"])
+
+        let (_, delegateJSON) = try await rpc([
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": [
+                "name": "deck_delegate_prompt",
+                "arguments": ["target": "codex", "prompt": "inspect repo", "source_session_key": "source-1", "source_profile_id": "default"],
+            ],
+        ], token: gatewayToken)
+        #expect(callText(delegateJSON)?.contains("queued codex: inspect repo") == true)
+    }
+
+    @Test func delegateResponseMarksFallbackOnlyWhenUnavailable() {
+        // Unavailable → fallback flag, so the plugin retries the legacy TCP IPC.
+        #expect(DeckMCPDelegateResponse(ok: false, status: nil, error: "x", fallback: true)
+            .jsonString.contains("\"fallback\":true"))
+        // Validation failure → no fallback (IPC routes the same path, same result).
+        #expect(!DeckMCPDelegateResponse(ok: false, status: nil, error: "x")
+            .jsonString.contains("fallback"))
     }
 
     @Test func cleanupConfigDeletesFiles() throws {
@@ -102,4 +147,3 @@ struct DeckMCPServerTests {
         }
     }
 }
-

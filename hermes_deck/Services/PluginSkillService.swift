@@ -86,7 +86,7 @@ enum HermesSkillListParser {
 
 struct LocalHermesPluginProvider: HermesPluginProvider {
     static let deckDelegationPluginName = "deck-delegate-agent"
-    static let deckDelegationPluginVersion = "0.1.2"
+    static let deckDelegationPluginVersion = "0.1.3"
 
     var configURL: URL
     var userPluginsURL: URL
@@ -350,7 +350,7 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
 
     private static let deckDelegationPluginManifest = """
     name: deck-delegate-agent
-    version: 0.1.2
+    version: 0.1.3
     description: "Route delegated prompts from Hermes back to Hermes Deck."
     author: Hermes Deck
     kind: standalone
@@ -365,8 +365,9 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
     `deck_delegate_agent` tool.
 
     The tool validates `target` and `prompt`, then calls back to Hermes Deck
-    through `HERMES_DECK_ROUTE_HOST`, `HERMES_DECK_ROUTE_PORT`, and
-    `HERMES_DECK_ROUTE_TOKEN`. Hermes Deck owns the actual routing, thread
+    through the Deck MCP endpoint (`HERMES_DECK_MCP_URL` and
+    `HERMES_DECK_MCP_TOKEN`). If MCP is unavailable, it falls back to the
+    legacy TCP IPC variables. Hermes Deck owns the actual routing, thread
     updates, and UI handoff.
     """
 
@@ -376,6 +377,8 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
     import json
     import os
     import socket
+    import urllib.error
+    import urllib.request
     from typing import Any, Dict
 
 
@@ -424,6 +427,124 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         return _json(payload)
 
 
+    def _call_mcp(request: Dict[str, Any]) -> Dict[str, Any]:
+        url = os.getenv("HERMES_DECK_MCP_URL", "").strip()
+        token = os.getenv("HERMES_DECK_MCP_TOKEN", "").strip()
+        if not url or not token:
+            missing = [
+                name
+                for name, value in {
+                    "HERMES_DECK_MCP_URL": url,
+                    "HERMES_DECK_MCP_TOKEN": token,
+                }.items()
+                if not value
+            ]
+            return {"ok": False, "fallback": True, "error": "Hermes Deck MCP is not available", "missing": missing}
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "deck-delegate-agent",
+            "method": "tools/call",
+            "params": {
+                "name": "deck_delegate_prompt",
+                "arguments": request,
+            },
+        }
+        http_request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=10) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+            return {"ok": False, "fallback": True, "error": f"Failed to call Hermes Deck MCP: {exc}"}
+
+        try:
+            envelope = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"ok": False, "fallback": True, "error": "Hermes Deck MCP returned non-JSON", "raw": raw}
+        if not isinstance(envelope, dict):
+            return {"ok": False, "fallback": True, "error": "Hermes Deck MCP returned an invalid response", "response": envelope}
+        if "error" in envelope:
+            return {"ok": False, "fallback": True, "error": "Hermes Deck MCP JSON-RPC error", "response": envelope}
+
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            return {"ok": False, "fallback": True, "error": "Hermes Deck MCP returned no tool result", "response": envelope}
+        content = result.get("content")
+        text = ""
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict):
+                text = str(first.get("text") or "")
+        try:
+            decoded = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            decoded = {"ok": not bool(result.get("isError")), "status": text}
+        if isinstance(decoded, dict):
+            return decoded
+        return {"ok": True, "response": decoded}
+
+
+    def _call_ipc(request: Dict[str, Any]) -> Dict[str, Any]:
+        host = os.getenv("HERMES_DECK_ROUTE_HOST", "").strip()
+        port = os.getenv("HERMES_DECK_ROUTE_PORT", "").strip()
+        token = os.getenv("HERMES_DECK_ROUTE_TOKEN", "").strip()
+        if not token or not host or not port:
+            missing = [
+                name
+                for name, value in {
+                    "HERMES_DECK_ROUTE_HOST": host,
+                    "HERMES_DECK_ROUTE_PORT": port,
+                    "HERMES_DECK_ROUTE_TOKEN": token,
+                }.items()
+                if not value
+            ]
+            return {
+                "ok": False,
+                "error": "Hermes Deck routing IPC is not available. Run this tool from a Hermes gateway/session started by the Hermes Deck desktop app, then restart that gateway after installing or updating deck_delegate_agent.",
+                "missing": missing,
+                "request": request,
+            }
+
+        envelope = dict(request)
+        envelope["token"] = token
+        newline = bytes([10])
+
+        try:
+            client = socket.create_connection((host, int(port)), timeout=10)
+            with client:
+                client.settimeout(10)
+                client.sendall(json.dumps(envelope, ensure_ascii=False).encode("utf-8") + newline)
+                chunks = []
+                while True:
+                    chunk = client.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if newline in chunk:
+                        break
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": f"Failed to call Hermes Deck routing IPC: {exc}", "request": request}
+
+        raw = b"".join(chunks).split(newline, 1)[0].decode("utf-8", errors="replace")
+        if not raw.strip():
+            return {"ok": False, "error": "Hermes Deck routing IPC returned an empty response", "request": request}
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"ok": False, "error": "Hermes Deck routing IPC returned non-JSON", "raw": raw, "request": request}
+        if isinstance(response, dict):
+            return response
+        return {"ok": True, "response": response}
+
+
     def _handle(args: Dict[str, Any], **kwargs: Any) -> str:
         target = str(args.get("target") or "").strip().lstrip("@")
         prompt = str(args.get("prompt") or "").strip()
@@ -447,55 +568,14 @@ struct LocalHermesPluginProvider: HermesPluginProvider {
         if dry_run:
             return _json({"ok": True, "dry_run": True, "request": request})
 
-        host = os.getenv("HERMES_DECK_ROUTE_HOST", "").strip()
-        port = os.getenv("HERMES_DECK_ROUTE_PORT", "").strip()
-        token = os.getenv("HERMES_DECK_ROUTE_TOKEN", "").strip()
-        if not token or not host or not port:
-            missing = [
-                name
-                for name, value in {
-                    "HERMES_DECK_ROUTE_HOST": host,
-                    "HERMES_DECK_ROUTE_PORT": port,
-                    "HERMES_DECK_ROUTE_TOKEN": token,
-                }.items()
-                if not value
-            ]
-            return _error(
-                "Hermes Deck routing IPC is not available. Run this tool from a Hermes gateway/session started by the Hermes Deck desktop app, then restart that gateway after installing or updating deck_delegate_agent.",
-                missing=missing,
-                request=request,
-            )
+        mcp_response = _call_mcp(request)
+        if mcp_response.get("ok") or not mcp_response.get("fallback"):
+            return _json(mcp_response)
 
-        envelope = dict(request)
-        envelope["token"] = token
-        newline = bytes([10])
-
-        try:
-            client = socket.create_connection((host, int(port)), timeout=10)
-            with client:
-                client.settimeout(10)
-                client.sendall(json.dumps(envelope, ensure_ascii=False).encode("utf-8") + newline)
-                chunks = []
-                while True:
-                    chunk = client.recv(65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    if newline in chunk:
-                        break
-        except (OSError, ValueError) as exc:
-            return _error(f"Failed to call Hermes Deck routing IPC: {exc}", request=request)
-
-        raw = b"".join(chunks).split(newline, 1)[0].decode("utf-8", errors="replace")
-        if not raw.strip():
-            return _error("Hermes Deck routing IPC returned an empty response", request=request)
-        try:
-            response = json.loads(raw)
-        except json.JSONDecodeError:
-            return _error("Hermes Deck routing IPC returned non-JSON", raw=raw, request=request)
-        if isinstance(response, dict):
-            return _json(response)
-        return _json({"ok": True, "response": response})
+        ipc_response = _call_ipc(request)
+        if not ipc_response.get("ok"):
+            ipc_response["mcp_error"] = mcp_response.get("error")
+        return _json(ipc_response)
 
 
     def register(ctx) -> None:
