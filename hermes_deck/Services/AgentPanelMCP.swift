@@ -136,8 +136,15 @@ enum AgentPanelMCP {
 enum DeckReplyPrimer {
     /// Whether a backend takes the convention via its system prompt at launch
     /// (so the visible prompt stays clean) rather than a per-turn prefix.
+    /// Always false. A session-wide system prompt can't tell the model which
+    /// turn is the delegated one — the injected prompt is indistinguishable from
+    /// a user message in an interactive TUI — so the model answers in-panel and
+    /// never calls `deck_reply`. The (now one-line) per-turn primer is the
+    /// reliable trigger. claude still gets `--append-system-prompt` as extra
+    /// context, but the primer is what closes the loop. Do not key this on
+    /// claude: it reintroduces the "claude answers but never replies" bug.
     static func usesSystemPrompt(_ backend: AgentBackend) -> Bool {
-        backend == .claudeCLI
+        false
     }
 
     /// Visible, per-turn instruction for CLIs without a clean system-prompt hook
