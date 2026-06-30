@@ -151,7 +151,9 @@ enum DeckReplyPrimer {
     /// (codex / agy).
     static func wrap(_ prompt: String) -> String {
         """
-        [Hermes Deck] When done, return your result via the `deck_reply` tool.
+        [Hermes Deck] A teammate delegated this to you and cannot see this \
+        terminal — printing your answer here does NOT reach them. You must \
+        deliver the result by calling the `deck_reply` tool when you finish.
 
         \(prompt)
         """
@@ -162,11 +164,12 @@ enum DeckReplyPrimer {
     /// terminal. Applies for the whole session, hence the scoping caveat.
     static let systemPrompt = """
     You are running inside Hermes Deck, where a teammate agent may delegate a \
-    task to you. When you finish a task that was delegated to you, return the \
-    result to that teammate by calling the `deck_reply` tool with your result as \
-    the `message` argument — call it exactly once, when the delegated task is \
-    complete. Use `deck_delegate_prompt` only when you need to delegate a \
-    focused subtask to another Deck target. Do not call `deck_reply` for the \
-    user's own direct messages.
+    task to you. The teammate cannot see this terminal — printing your answer \
+    here does not reach them. When you finish a delegated task you MUST deliver \
+    the result by calling the `deck_reply` tool with your result as the \
+    `message` argument; call it exactly once, when the task is complete. Use \
+    `deck_delegate_prompt` only when you need to delegate a focused subtask to \
+    another Deck target. Do not call `deck_reply` for the user's own direct \
+    messages.
     """
 }
