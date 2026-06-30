@@ -46,7 +46,8 @@ enum AgentPanelMCP {
             .appendingPathComponent(".gemini/antigravity-cli/settings.json")
     }
 
-    static var legacyGeminiMCPConfigFileURL: URL {
+    /// The file agy actually reads MCP servers from.
+    static var geminiMCPConfigFileURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".gemini/config/mcp_config.json")
     }
@@ -57,8 +58,10 @@ enum AgentPanelMCP {
     }
 
     static func cleanupGeminiConfig() {
+        removeGeminiDeckServer(from: geminiMCPConfigFileURL, removeEmptyFile: true)
+        // Older builds wrote the entry into the Antigravity settings file; clear
+        // it there too (keep the file — it holds the user's other settings).
         removeGeminiDeckServer(from: geminiCLISettingsFileURL, removeEmptyFile: false)
-        removeGeminiDeckServer(from: legacyGeminiMCPConfigFileURL, removeEmptyFile: true)
     }
 
     private static func removeGeminiDeckServer(from file: URL, removeEmptyFile: Bool) {
@@ -110,9 +113,9 @@ enum AgentPanelMCP {
     }
 
     private static func gemini(url: String, token: String) -> Launch {
-        // agy/Gemini reads the Antigravity CLI settings file. Its MCP schema
-        // accepts `serverUrl`/`url`; `httpUrl` is ignored by agy.
-        let file = geminiCLISettingsFileURL
+        // agy reads MCP servers from ~/.gemini/config/mcp_config.json; its schema
+        // uses `serverUrl`/`url` (it has no `httpUrl` field, so that is ignored).
+        let file = geminiMCPConfigFileURL
         var root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]) ?? [:]
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         servers["deck"] = [
