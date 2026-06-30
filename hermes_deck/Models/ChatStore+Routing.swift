@@ -392,12 +392,14 @@ extension ChatStore {
                         try? await Task.sleep(for: .milliseconds(offset * 300))
                     }
                     if isExternal, closesLoopToSource {
-                        // Forward into the live panel CLI, primed to return its
-                        // result via the `deck_reply` MCP tool — which closes the
-                        // loop asynchronously, so the hand-off stays waiting and
-                        // we don't contribute a synchronous close-the-loop entry.
-                        let primed = DeckReplyPrimer.wrap(message)
-                        let sent = await sendPromptToExternalAgentPanel(primed, backend: backend, threadID: agentThreadID)
+                        // Forward into the live panel CLI so it returns its
+                        // result via the `deck_reply` MCP tool — closing the loop
+                        // asynchronously, so the hand-off stays waiting and we
+                        // don't add a synchronous close-the-loop entry. CLIs that
+                        // take the convention in their system prompt (claude) get
+                        // the clean prompt; the rest get a per-turn primer.
+                        let forwarded = DeckReplyPrimer.usesSystemPrompt(backend) ? message : DeckReplyPrimer.wrap(message)
+                        let sent = await sendPromptToExternalAgentPanel(forwarded, backend: backend, threadID: agentThreadID)
                         if sent {
                             recordPanelReplyBinding(
                                 panelThreadID: agentThreadID,

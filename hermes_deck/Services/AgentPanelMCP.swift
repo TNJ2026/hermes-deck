@@ -75,7 +75,9 @@ enum AgentPanelMCP {
               (try? data.write(to: file)) != nil else {
             return Launch()
         }
-        return Launch(args: ["--mcp-config", file.path])
+        // The reply convention rides in the system prompt so the delegated
+        // prompt itself stays clean in the terminal.
+        return Launch(args: ["--mcp-config", file.path, "--append-system-prompt", DeckReplyPrimer.systemPrompt])
     }
 
     private static func codex(url: String, token: String) -> Launch {
@@ -107,11 +109,19 @@ enum AgentPanelMCP {
     }
 }
 
-/// Minimal instruction prefixed to a delegated prompt. The `deck_reply` tool is
-/// discoverable via MCP, but a model won't call it unless told the task was
-/// delegated and the result must be returned — so one clean line (referencing
-/// the native tool, not a pasted shell command) drives the close-the-loop.
+/// Instruction that drives the `deck_reply` tool call. The tool is discoverable
+/// via MCP, but a model won't call it unless told the task was delegated and the
+/// result must be returned.
 enum DeckReplyPrimer {
+    /// Whether a backend takes the convention via its system prompt at launch
+    /// (so the visible prompt stays clean) rather than a per-turn prefix.
+    static func usesSystemPrompt(_ backend: AgentBackend) -> Bool {
+        if case .claudeCLI = backend { return true }
+        return false
+    }
+
+    /// Visible, per-turn instruction for CLIs without a clean system-prompt hook
+    /// (codex / agy).
     static func wrap(_ prompt: String) -> String {
         """
         [Hermes Deck] A teammate delegated this task to you. When you have the \
@@ -122,5 +132,16 @@ enum DeckReplyPrimer {
         \(prompt)
         """
     }
+
+    /// System-prompt convention for CLIs that accept one at launch (claude), so
+    /// the delegated prompt itself stays clean — nothing is pasted into the
+    /// terminal. Applies for the whole session, hence the scoping caveat.
+    static let systemPrompt = """
+    You are running inside Hermes Deck, where a teammate agent may delegate a \
+    task to you. When you finish a task that was delegated to you, return the \
+    result to that teammate by calling the `deck_reply` tool with your result as \
+    the `message` argument — call it exactly once, when the delegated task is \
+    complete. Do not call `deck_reply` for the user's own direct messages.
+    """
 }
 

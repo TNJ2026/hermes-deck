@@ -16,6 +16,8 @@ struct DeckMCPServerTests {
         // claude: a written --mcp-config file carrying the bearer header.
         let session = UUID()
         let claude = AgentPanelMCP.configure(backend: .claudeCLI, sessionID: session)
+        // The reply convention rides in the system prompt, not the visible prompt.
+        #expect(claude.args.contains("--append-system-prompt"))
         let flagIndex = try #require(claude.args.firstIndex(of: "--mcp-config"))
         let path = claude.args[claude.args.index(after: flagIndex)]
         let json = try #require(try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
