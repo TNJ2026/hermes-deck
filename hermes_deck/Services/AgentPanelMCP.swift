@@ -130,34 +130,22 @@ enum AgentPanelMCP {
     }
 }
 
-/// Instruction that drives the `deck_reply` tool call. The tool is discoverable
-/// via MCP, but a model won't call it unless told the task was delegated and the
-/// result must be returned.
+/// Instruction that drives the `deck_reply` tool call for panel-based
+/// delegation. The tool is discoverable via MCP, but a model won't call it
+/// unless told the task was delegated and the result must be returned.
 enum DeckReplyPrimer {
     /// Whether a backend takes the convention via its system prompt at launch
     /// (so the visible prompt stays clean) rather than a per-turn prefix.
-    ///
-    /// Always false: a session-wide system prompt can't tell the model which
-    /// turn is the delegated one (the injected prompt is indistinguishable from
-    /// a user message in an interactive TUI), so the model answers in-panel and
-    /// never calls `deck_reply`. The per-turn primer is the reliable signal.
-    /// claude still gets `--append-system-prompt` as extra context, but the
-    /// primer is what triggers the reply.
     static func usesSystemPrompt(_ backend: AgentBackend) -> Bool {
-        false
+        backend == .claudeCLI
     }
 
     /// Visible, per-turn instruction for CLIs without a clean system-prompt hook
     /// (codex / agy).
     static func wrap(_ prompt: String) -> String {
         """
-        [Hermes Deck] A teammate delegated this task to you. When you have the \
-        final result, return it to them by calling the `deck_reply` tool with \
-        your result as the `message` argument, then stop. Use \
-        `deck_delegate_prompt` only when you need to delegate a focused subtask \
-        to another Deck target.
+        [Hermes Deck] When done, return your result via the `deck_reply` tool.
 
-        Task:
         \(prompt)
         """
     }
