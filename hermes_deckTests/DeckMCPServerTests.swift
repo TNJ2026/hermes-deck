@@ -7,8 +7,28 @@ import Testing
 // handler.
 @Suite(.serialized)
 struct DeckMCPServerTests {
+    private func geminiDeckServer(in file: URL) throws -> [String: Any]? {
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+        return (root?["mcpServers"] as? [String: Any])?["deck"] as? [String: Any]
+    }
+
     @Test func agentPanelMCPWiresEachCLI() throws {
         try DeckMCPServer.shared.start { _, _ in "ok" } // ensure the endpoint is up
+        let geminiFiles = [AgentPanelMCP.geminiCLISettingsFileURL, AgentPanelMCP.legacyGeminiMCPConfigFileURL]
+        let geminiSnapshots = geminiFiles.reduce(into: [URL: Data?]()) { snapshots, file in
+            snapshots[file] = try? Data(contentsOf: file)
+        }
+        defer {
+            AgentPanelMCP.cleanupGeminiConfig()
+            for file in geminiFiles {
+                if let data = geminiSnapshots[file] ?? nil {
+                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try? data.write(to: file)
+                } else {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
+        }
 
         // codex: config overrides on argv + bearer token via env var.
         let codex = AgentPanelMCP.configure(backend: .acp(.codex), sessionID: UUID())
@@ -31,6 +51,17 @@ struct DeckMCPServerTests {
         #expect(auth?.hasPrefix("Bearer ") == true)
         // Token matches the one minted for this session.
         #expect(auth == "Bearer \(DeckMCPServer.shared.token(forSession: session.uuidString))")
+
+        // agy/Gemini: Deck goes into Antigravity CLI settings using its MCP
+        // HTTP URL fields.
+        _ = AgentPanelMCP.configure(backend: .agy, sessionID: UUID())
+        let maybeGeminiDeck = try geminiDeckServer(in: AgentPanelMCP.geminiCLISettingsFileURL)
+        let geminiDeck = try #require(maybeGeminiDeck)
+        #expect(geminiDeck["serverUrl"] as? String == DeckMCPServer.shared.endpointURL())
+        #expect(geminiDeck["url"] as? String == DeckMCPServer.shared.endpointURL())
+        #expect(geminiDeck["httpUrl"] == nil)
+        let geminiAuth = (geminiDeck["headers"] as? [String: Any])?["Authorization"] as? String
+        #expect(geminiAuth?.hasPrefix("Bearer ") == true)
     }
 
     @Test func deckReplyMCPHandshakeAndToolCall() async throws {
@@ -130,20 +161,32 @@ struct DeckMCPServerTests {
         #expect(!FileManager.default.fileExists(atPath: file.path))
 
         // Gemini
+        let geminiFiles = [AgentPanelMCP.geminiCLISettingsFileURL, AgentPanelMCP.legacyGeminiMCPConfigFileURL]
+        let geminiSnapshots = geminiFiles.reduce(into: [URL: Data?]()) { snapshots, file in
+            snapshots[file] = try? Data(contentsOf: file)
+        }
+        defer {
+            for file in geminiFiles {
+                if let data = geminiSnapshots[file] ?? nil {
+                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try? data.write(to: file)
+                } else {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
+        }
         _ = AgentPanelMCP.configure(backend: .agy, sessionID: UUID())
-        let geminiFile = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".gemini/config/mcp_config.json")
+        let geminiFile = AgentPanelMCP.geminiCLISettingsFileURL
         #expect(FileManager.default.fileExists(atPath: geminiFile.path))
-        let textBefore = try String(contentsOf: geminiFile)
-        #expect(textBefore.contains("deck"))
+        #expect(try geminiDeckServer(in: geminiFile) != nil)
+
+        let legacyFile = AgentPanelMCP.legacyGeminiMCPConfigFileURL
+        let legacyRoot: [String: Any] = ["mcpServers": ["deck": ["httpUrl": "http://old.example/mcp"]]]
+        try FileManager.default.createDirectory(at: legacyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: legacyRoot, options: .prettyPrinted).write(to: legacyFile)
 
         AgentPanelMCP.cleanupGeminiConfig()
-        let fileExists = FileManager.default.fileExists(atPath: geminiFile.path)
-        if fileExists {
-            let textAfter = try String(contentsOf: geminiFile)
-            #expect(!textAfter.contains("deck"))
-        } else {
-            #expect(!fileExists)
-        }
+        #expect(try geminiDeckServer(in: geminiFile) == nil)
+        #expect(!FileManager.default.fileExists(atPath: legacyFile.path))
     }
 }

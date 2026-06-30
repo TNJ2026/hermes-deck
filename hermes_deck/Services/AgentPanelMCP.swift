@@ -41,22 +41,39 @@ enum AgentPanelMCP {
         configDirectory.appendingPathComponent("claude-\(sessionID.uuidString).json")
     }
 
+    static var geminiCLISettingsFileURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".gemini/antigravity-cli/settings.json")
+    }
+
+    static var legacyGeminiMCPConfigFileURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".gemini/config/mcp_config.json")
+    }
+
     static func cleanupClaudeConfig(sessionID: UUID) {
         let file = claudeConfigFileURL(sessionID: sessionID)
         try? FileManager.default.removeItem(at: file)
     }
 
     static func cleanupGeminiConfig() {
-        let file = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".gemini/config/mcp_config.json")
+        removeGeminiDeckServer(from: geminiCLISettingsFileURL, removeEmptyFile: false)
+        removeGeminiDeckServer(from: legacyGeminiMCPConfigFileURL, removeEmptyFile: true)
+    }
+
+    private static func removeGeminiDeckServer(from file: URL, removeEmptyFile: Bool) {
         guard var root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]) else { return }
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         guard servers.removeValue(forKey: "deck") != nil else { return }
-        root["mcpServers"] = servers
         if servers.isEmpty {
+            root.removeValue(forKey: "mcpServers")
+        } else {
+            root["mcpServers"] = servers
+        }
+        if removeEmptyFile && root.isEmpty {
             try? FileManager.default.removeItem(at: file)
         } else {
-            try? JSONSerialization.data(withJSONObject: root, options: .prettyPrinted).write(to: file)
+            try? JSONSerialization.data(withJSONObject: root, options: .prettyPrinted).write(to: file, options: .atomic)
         }
     }
 
@@ -72,7 +89,7 @@ enum AgentPanelMCP {
         ]
         let file = claudeConfigFileURL(sessionID: sessionID)
         guard let data = try? JSONSerialization.data(withJSONObject: config),
-              (try? data.write(to: file)) != nil else {
+              (try? data.write(to: file, options: .atomic)) != nil else {
             return Launch()
         }
         // The reply convention rides in the system prompt so the delegated
@@ -93,13 +110,14 @@ enum AgentPanelMCP {
     }
 
     private static func gemini(url: String, token: String) -> Launch {
-        // agy/Gemini reads a global mcp config file; merge rather than clobber.
-        let file = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".gemini/config/mcp_config.json")
+        // agy/Gemini reads the Antigravity CLI settings file. Its MCP schema
+        // accepts `serverUrl`/`url`; `httpUrl` is ignored by agy.
+        let file = geminiCLISettingsFileURL
         var root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]) ?? [:]
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         servers["deck"] = [
-            "httpUrl": url,
+            "serverUrl": url,
+            "url": url,
             "headers": ["Authorization": "Bearer \(token)"],
         ]
         root["mcpServers"] = servers
